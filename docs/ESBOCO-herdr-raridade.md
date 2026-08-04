@@ -151,32 +151,58 @@ histórico público real. A aura desbloqueia variantes (shiny "por mérito", mol
 evolução visual) **sem mexer no tier forjado**. O bicho amadurece com a carreira — e os mesmos
 eventos que enchem a barriga forjam a aura.
 
-## Mapeamento no Herdr (estrutura constatada 2026-08-04)
+## Mapeamento no Herdr (doc oficial confirmada — v0.8.0)
 
 Plugin nativo do Herdr = **manifest `herdr-plugin.toml`** + **binário Rust**. O Herdr executa o
-`command` de cada entrada do manifest — a linguagem é livre (o plugin oficial `browser` usa
-`bun`/TypeScript; nós usamos Rust). Schema confirmado inspecionando o plugin oficial:
+`command` (argv array) de cada entrada — linguagem livre (doc: *"a Bash script, JavaScript app, Lua
+script, **Rust binary**, or any other argv command"*). Rendering de pane = **stdout/ANSI**
+(documentado; **não há protocolo de gráficos** — LCD 1-bit em Unicode block chars + ANSI é o caminho
+oficial). Doc: https://herdr.dev/docs/plugins/
+
+Schema confirmado (seções `[[...]]`): `[[build]]`, `[[startup]]`, `[[actions]]`, `[[events]]`,
+`[[panes]]`, `[[link_handlers]]`, `[[keys.command]]`. **Não existem**: `[[commands]]`,
+`[[settings]]`/`[[config]]` (config do usuário = arquivo em `HERDR_PLUGIN_CONFIG_DIR`).
+
+**Estrutura alvo do manifest do companion:**
 
 ```toml
-id = "..."                # + name, version, min_herdr_version, description, platforms
-[[actions]]               # id, title, contexts, command   → comandos invocáveis
-[[panes]]                 # id, title, placement, command   → UI persistente ("casinha")
-[[link_handlers]]         # id, title, pattern (regex), action → reage a links
+id = "fredericotmello.herdr-pet"          # + name, version, min_herdr_version, platforms
+[[build]]
+command = ["cargo", "build", "--release"]  # Herdr compila o Rust no install (do GitHub)
+[[startup]]
+command = ["./target/release/herdr-pet", "startup"]   # boot: hatch/lock-in inicial + sync de aura
+[[panes]]
+id = "lcd"
+title = "Pet"
+placement = "split"
+command = ["./target/release/herdr-pet", "watch"]     # casinha LCD no stdout
+[[actions]]
+id = "feed"   # ... play / sleep / status / reborn  (comandos do joguinho)
+[[events]]
+on = "worktree.created"                     # acordar/celebrar + re-sync de aura
+command = ["./target/release/herdr-pet", "on-event"]
+[[link_handlers]]
+id = "github-pr"                            # petisco: clicar em PR/issue alimenta
+pattern = "^https://github\\.com/.+/(pull|issues)/[0-9]+$"
+action = "feed"
 ```
 
-- **`[[panes]]` → a casinha LCD.** Renderiza o pet no **stdout do pane** (ANSI/1-bit). **Não** precisa
-  do graphics transport pesado que o plugin `browser` usa pra páginas web — LCD em ASCII basta.
-  Renderer LCD portado do petterm pra Rust; **cor = raridade**.
-- **`[[actions]]` → feed / play / sleep / status / reborn** (comandos do joguinho).
-- **`[[link_handlers]]` → petiscos** (reagir a links de PR/issue, etc.).
-- **`[[startup]]` / `[[events]]`: NÃO confirmados** no schema do plugin oficial (só vi actions / panes
-  / link_handlers). Se existirem no Herdr, ótimo; senão, **plan B = polling `gh api`** num loop do
-  pane/action, que independe de eventos nativos do Herdr.
+- **`[[build]]`** = `cargo build --release` → Herdr compila no `install`. Sem runtime.
+- **`[[startup]]`** roda 1× após restaurar sessão: hatch/lock-in inicial + sync de aura.
+- **`[[panes]]` `placement=split`** = casinha LCD persistente no stdout (cor = raridade).
+- **`[[events]]`** confirmado: `on` validado no link time (worktree.created, pane.focused, …). Acorda
+  o pet e dispara re-sync de aura **sem polling cego** — mas a aura em si (PR mergeado, issue fechada)
+  vem do GitHub via `gh api`, então `startup` + eventos disparam essas leituras.
+- **`[[link_handlers]]`** `pattern` é **regex Rust** → petiscos ao clicar em PR/issue.
+- State em `HERDR_PLUGIN_STATE_DIR` (não em `HERDR_PLUGIN_ROOT`). **Raridade nunca vive só lá** —
+  sempre re-derivável da âncora.
 
-Env vars que o Herdr passa ao `command`: `HERDR_PLUGIN_ID`, `HERDR_PLUGIN_STATE_DIR`,
-`HERDR_PLUGIN_CONFIG_DIR`, `HERDR_PANE_ID`, `HERDR_SESSION`, `HERDR_BIN_PATH` (CLI `herdr`),
-`HERDR_CELL_WIDTH_PX` / `HERDR_CELL_HEIGHT_PX`. State persistente em `HERDR_PLUGIN_STATE_DIR` — mas a
-**raridade nunca vive só lá**, é sempre re-derivável da âncora.
+Env vars de runtime (doc oficial): `HERDR_SOCKET_PATH`, `HERDR_BIN_PATH` (CLI `herdr`),
+`HERDR_PLUGIN_ID`, `HERDR_PLUGIN_ROOT`, `HERDR_PLUGIN_CONFIG_DIR`, `HERDR_PLUGIN_STATE_DIR`,
+`HERDR_PLUGIN_CONTEXT_JSON` (workspace/tab/pane/worktree/agent/selected/clicked-url), `HERDR_PANE_ID`,
+`HERDR_PLUGIN_EVENT(_JSON)`, etc. **Sem SDK oficial** — a "API do plugin" é a CLI `herdr` (subprocesso)
+ou JSON over `HERDR_SOCKET_PATH`. (`HERDR_CELL_*_PX` só o plugin `browser` usa — não documentadas; LCD
+em células de caractere não precisa.)
 
 ## O limite honesto
 
