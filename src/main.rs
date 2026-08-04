@@ -33,6 +33,8 @@ enum Cmd {
         #[arg(long)]
         id: Option<u64>,
     },
+    /// Galeria: um pet de cada tier (+ um shiny) pra ver cores e sprites.
+    Gallery,
     /// Estado do companion.
     Status,
 }
@@ -106,11 +108,48 @@ fn main() {
                 frame = frame.wrapping_add(1);
             }
         }
+        Cmd::Gallery => {
+            use herdr_pet::{Pet, Rarity};
+            use std::collections::HashMap;
+            let order = [
+                Rarity::Common,
+                Rarity::Uncommon,
+                Rarity::Rare,
+                Rarity::Epic,
+                Rarity::Legendary,
+            ];
+            let mut by_tier: HashMap<Rarity, Pet> = HashMap::new();
+            let mut shiny: Option<Pet> = None;
+            let mut id = 0u64;
+            while (by_tier.len() < 5 || shiny.is_none()) && id < 50_000 {
+                let pet = hatch(id, 0);
+                if pet.shiny && shiny.is_none() {
+                    shiny = Some(pet.clone());
+                }
+                by_tier.entry(pet.rarity).or_insert(pet);
+                id += 1;
+            }
+            println!(
+                "{}Galeria — um pet de cada tier (cor + sprite diferentes){}\n",
+                herdr_pet::render::DIM,
+                herdr_pet::render::RESET
+            );
+            for tier in order {
+                if let Some(pet) = by_tier.get(&tier) {
+                    println!("{}", herdr_pet::render::render_casinha(pet, 0));
+                    println!();
+                }
+            }
+            if let Some(pet) = shiny {
+                println!("{}✨ Bônus: um SHINY (dourado){}\n", herdr_pet::render::BOLD, herdr_pet::render::RESET);
+                println!("{}", herdr_pet::render::render_casinha(&pet, 0));
+            }
+        }
         Cmd::Status => {
             println!("herdr-pet — companion V-Pet do Herdr");
             println!("genesis_version : {}", GENESIS_VERSION);
             println!("raridade        : forjada por âncora GitHub (não sorteada)");
-            println!("subcomandos     : init | hatch | lineage | watch | status");
+            println!("subcomandos     : init | hatch | lineage | watch | gallery | status");
         }
     }
 }
@@ -121,7 +160,7 @@ fn print_pet(pet: &herdr_pet::Pet) {
     println!(
         "│ espécie : {}{}",
         pet.species.name,
-        if pet.shiny { "  ✨ shiny" } else { "" }
+        if pet.shiny { "  ✦ shiny" } else { "" }
     );
     println!("│ tier    : {}", pet.rarity.as_str());
     println!("│ HP/SP   : {} / {}", pet.stats.hp_max, pet.stats.sp_max);

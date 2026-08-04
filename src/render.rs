@@ -139,7 +139,12 @@ pub fn render_casinha(pet: &Pet, frame: u32) -> String {
     );
     row_left(
         &mut o,
-        &format!("A{} D{} ◆{} ◇{} »{}", pet.stats.atk, pet.stats.def, pet.stats.sp_atk, pet.stats.sp_def, pet.stats.speed),
+        &format!("ATK {}  DEF {}  SpA {}", pet.stats.atk, pet.stats.def, pet.stats.sp_atk),
+        W,
+    );
+    row_left(
+        &mut o,
+        &format!("SpD {}  SPE {}", pet.stats.sp_def, pet.stats.speed),
         W,
     );
 
