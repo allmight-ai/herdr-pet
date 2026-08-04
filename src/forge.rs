@@ -2,9 +2,9 @@
 //! (ID GitHub) e do índice (0 = nascimento; 1+ = renascimentos / novos pets da
 //! coleção).
 
-use crate::catalog::{species_for_tier, RARITY_WEIGHTS, SHINY_DENOMINATOR};
+use crate::catalog::{base_stats_for_tier, species_for_tier, RARITY_WEIGHTS, SHINY_DENOMINATOR};
 use crate::crypto::{gene, root_seed, GENESIS_VERSION};
-use crate::pet::{IV, Pet, Provenance, Rarity, Species};
+use crate::pet::{CombatStats, IV, Pet, Provenance, Rarity, Species};
 
 /// Forma canônica da âncora: `"github:<id>"`.
 pub fn anchor_for(github_id: u64) -> String {
@@ -28,7 +28,6 @@ fn roll_weighted(entropy: u64) -> Rarity {
             return *tier;
         }
     }
-    // Inalcançável (r < total), mas o compilador exige um retorno.
     Rarity::Legendary
 }
 
@@ -40,9 +39,8 @@ fn pick_species(tier: Rarity, entropy: u64) -> Species {
 
 /// Forja o pet de índice `index` para a âncora dada.
 ///
-/// **Idempotente**: mesma âncora + mesmo índice => mesmo pet, sempre. A raridade
-/// nunca esteve no disco — é sempre re-derivável. Índices diferentes = pets
-/// diferentes (a base da coleção / renascimento).
+/// **Idempotente**: mesma âncora + mesmo índice => mesmo pet, sempre. Stats de
+/// combate (HP/SP/atk/...) = `base + IV`, então IV perfeito (31) atinge o topo.
 pub fn hatch(github_id: u64, index: u32) -> Pet {
     let anchor = anchor_for(github_id);
     let root = root_seed(&anchor);
@@ -54,6 +52,11 @@ pub fn hatch(github_id: u64, index: u32) -> Pet {
     let iv = IV::from_gene(&pet_seed, "iv");
     let name = crate::name::pet_name(&pet_seed);
 
+    // Stats de combate: base (por tier) + IV. IV perfeito (31) => topo.
+    let base = base_stats_for_tier(rarity);
+    let sp_iv = (u64_of(&pet_seed, "sp_iv") % 32) as u8;
+    let stats = CombatStats::from(&base, &iv, sp_iv);
+
     Pet {
         index,
         name,
@@ -61,6 +64,7 @@ pub fn hatch(github_id: u64, index: u32) -> Pet {
         shiny,
         species,
         iv,
+        stats,
         provenance: Provenance {
             genesis_version: GENESIS_VERSION,
             origin: "herdr-pet",

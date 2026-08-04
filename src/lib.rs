@@ -13,8 +13,8 @@ pub mod name;
 pub mod pet;
 pub mod state;
 
-pub use catalog::{species_for_tier, RARITY_ORDER, RARITY_WEIGHTS, SHINY_DENOMINATOR};
+pub use catalog::{base_stats_for_tier, species_for_tier, RARITY_ORDER, RARITY_WEIGHTS, SHINY_DENOMINATOR};
 pub use crypto::{gene, hmac_sha256, root_seed, APP_SALT, GENESIS_VERSION};
 pub use name::pet_name;
 pub use forge::{anchor_for, hatch};
-pub use pet::{ForgeResult, IV, Pet, Provenance, Rarity, Species};
+pub use pet::{BaseStats, CombatStats, ForgeResult, IV, Pet, Provenance, Rarity, Species};

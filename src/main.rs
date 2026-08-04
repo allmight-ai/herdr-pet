@@ -57,22 +57,20 @@ fn main() {
         }
         Cmd::Lineage { id, count } => {
             println!("Coleção forjada de github:{} (genesis v{})", id, GENESIS_VERSION);
-            println!("{:-<72}", "");
+            println!("{:-<80}", "");
             for i in 0..count {
                 let pet = hatch(id, i);
                 println!(
-                    "  #{:<3} {:<16} {:<10} {:<8}{} IV {:>2}/{:>2}/{:>2}/{:>2}/{:>2}/{:>2}",
+                    "  #{:<3} {:<16} {:<10} {:<8}{} HP {:>3} SP {:>3}  IV {}/{}",
                     pet.index,
                     pet.name,
                     pet.rarity.as_str(),
                     pet.species.name,
-                    if pet.shiny { " ✨" } else { "  " },
-                    pet.iv.hp,
-                    pet.iv.atk,
-                    pet.iv.def,
-                    pet.iv.sp_atk,
-                    pet.iv.sp_def,
-                    pet.iv.speed,
+                    if pet.shiny { "✨" } else { " " },
+                    pet.stats.hp_max,
+                    pet.stats.sp_max,
+                    pet.iv.total(),
+                    186,
                 );
             }
         }
@@ -94,15 +92,21 @@ fn print_pet(pet: &Pet) {
         if pet.shiny { "  ✨ shiny" } else { "" }
     );
     println!("│ tier    : {}", pet.rarity.as_str());
+    println!("│ HP/SP   : {} / {}", pet.stats.hp_max, pet.stats.sp_max);
     println!(
-        "│ IV      : {}/{}/{}/{}/{}/{}  (hp/atk/def/spA/spD/spe, total {})",
+        "│ stats   : ATK {} · DEF {} · SpA {} · SpD {} · SPE {}",
+        pet.stats.atk, pet.stats.def, pet.stats.sp_atk, pet.stats.sp_def, pet.stats.speed
+    );
+    println!(
+        "│ IV      : {}/{}/{}/{}/{}/{}  (hp/atk/def/spA/spD/spe, total {}/{})",
         pet.iv.hp,
         pet.iv.atk,
         pet.iv.def,
         pet.iv.sp_atk,
         pet.iv.sp_def,
         pet.iv.speed,
-        pet.iv.total()
+        pet.iv.total(),
+        186,
     );
     println!("│ âncora  : {}", pet.provenance.anchor);
     println!("│ seed    : {}…", &pet.provenance.seed_hash[..12]);

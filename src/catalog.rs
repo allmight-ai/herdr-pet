@@ -1,14 +1,9 @@
-//! Catálogo de espécies (pixel-mons inventados) por tier, e os pesos de nascimento.
-//!
-//! Nomes são **provisórios** — tema "formas digitais geométricas", fáceis de
-//! desenhar em LCD 1-bit. Ajustar livremente; o mapeamento tier→espécies é o que
-//! importa pra a forja. Sprites vêm na Fase 4 (renderer).
+//! Catálogo de espécies (pixel-mons inventados) por tier, pesos de nascimento e
+//! base stats (para os stats de combate). Nomes de espécies são **provisórios**.
 
-use crate::pet::{Rarity, Species};
+use crate::pet::{BaseStats, Rarity, Species};
 
 /// Pesos de nascimento (somam 100). Common mais comum, Legendary raríssimo.
-/// Esta é a distribuição que cai sobre a **população** de usuários (1 pet forjado
-/// por âncora GitHub).
 pub const RARITY_WEIGHTS: &[(Rarity, u32)] = &[
     (Rarity::Common, 60),
     (Rarity::Uncommon, 25),
@@ -56,5 +51,17 @@ pub fn species_for_tier(tier: Rarity) -> &'static [Species] {
             Species { id: "aether", name: "Aether", tier: Rarity::Legendary },
             Species { id: "null", name: "Null", tier: Rarity::Legendary },
         ],
+    }
+}
+
+/// Base stats por tier (provisório — calibrar por espécie depois).
+/// `stat_efetivo = base + IV`; IV perfeito (31) atinge o topo (`base + 31`).
+pub fn base_stats_for_tier(tier: Rarity) -> BaseStats {
+    match tier {
+        Rarity::Common => BaseStats { hp: 40, atk: 30, def: 30, sp_atk: 30, sp_def: 30, speed: 30, sp: 30 },
+        Rarity::Uncommon => BaseStats { hp: 55, atk: 45, def: 45, sp_atk: 45, sp_def: 45, speed: 45, sp: 40 },
+        Rarity::Rare => BaseStats { hp: 70, atk: 60, def: 60, sp_atk: 60, sp_def: 60, speed: 60, sp: 50 },
+        Rarity::Epic => BaseStats { hp: 85, atk: 75, def: 75, sp_atk: 75, sp_def: 75, speed: 75, sp: 60 },
+        Rarity::Legendary => BaseStats { hp: 100, atk: 90, def: 90, sp_atk: 90, sp_def: 90, speed: 90, sp: 75 },
     }
 }

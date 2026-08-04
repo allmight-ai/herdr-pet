@@ -84,3 +84,19 @@ fn pet_names_are_unique_in_practice() {
         assert!(seen.insert(pet.name.clone()), "nome duplicado: {}", pet.name);
     }
 }
+
+#[test]
+fn combat_stats_are_base_plus_iv() {
+    // stat_efetivo = base + IV. IV perfeito (31) atinge o topo (base + 31).
+    use herdr_pet::base_stats_for_tier;
+    for id in 0..50u64 {
+        let pet = hatch(id, 0);
+        let base = base_stats_for_tier(pet.rarity);
+        assert_eq!(pet.stats.hp_max, base.hp + pet.iv.hp as u16);
+        assert_eq!(pet.stats.atk, base.atk + pet.iv.atk as u16);
+        assert_eq!(pet.stats.def, base.def + pet.iv.def as u16);
+        assert_eq!(pet.stats.sp_atk, base.sp_atk + pet.iv.sp_atk as u16);
+        assert_eq!(pet.stats.sp_def, base.sp_def + pet.iv.sp_def as u16);
+        assert_eq!(pet.stats.speed, base.speed + pet.iv.speed as u16);
+    }
+}

@@ -1,4 +1,4 @@
-//! Tipos do pet: raridade, espécie, IV e proveniência.
+//! Tipos do pet: raridade, espécie, IV, stats de combate e proveniência.
 
 use serde::Serialize;
 
@@ -30,7 +30,7 @@ pub struct Species {
     pub tier: Rarity,
 }
 
-/// Individual Values (genes de força), padrão Pokémon: 6 stats de 0–31.
+/// IV (genes de força), padrão Pokémon: 6 stats de 0–31.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct IV {
     pub hp: u8,
@@ -52,7 +52,7 @@ impl IV {
             + self.speed as u16
     }
 
-    /// Deriva os 6 stats de um gene nomeado (`byte % 32` → 0–31, distribuição uniforme).
+    /// Deriva os 6 stats de um gene nomeado (`byte % 32` → 0–31, uniforme).
     pub fn from_gene(seed: &[u8], name: &str) -> Self {
         let g = crate::crypto::gene(seed, name);
         let s = |i: usize| g[i] % 32;
@@ -67,7 +67,48 @@ impl IV {
     }
 }
 
-/// Proveniência criptográfica — o "recibo" forjado do pet (irá pro genesis gist).
+/// Base stats de uma espécie (por tier, por enquanto — calibrar por espécie depois).
+/// O IV perfeito (31) atinge o topo: `stat_efetivo = base + IV`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct BaseStats {
+    pub hp: u16,
+    pub atk: u16,
+    pub def: u16,
+    pub sp_atk: u16,
+    pub sp_def: u16,
+    pub speed: u16,
+    pub sp: u16, // stamina base (recurso pra usar skills)
+}
+
+/// Stats de combate efetivos (capacidade máxima), forjados = `base + IV`.
+/// HP/SP *atuais* + nível são state de gameplay (decai em batalha, regenera, sobe com XP).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct CombatStats {
+    pub hp_max: u16,
+    pub sp_max: u16,
+    pub atk: u16,
+    pub def: u16,
+    pub sp_atk: u16,
+    pub sp_def: u16,
+    pub speed: u16,
+}
+
+impl CombatStats {
+    /// `stat_efetivo = base + IV`. IV perfeito (31) → topo (`base + 31`).
+    pub fn from(base: &BaseStats, iv: &IV, sp_iv: u8) -> Self {
+        CombatStats {
+            hp_max: base.hp + iv.hp as u16,
+            atk: base.atk + iv.atk as u16,
+            def: base.def + iv.def as u16,
+            sp_atk: base.sp_atk + iv.sp_atk as u16,
+            sp_def: base.sp_def + iv.sp_def as u16,
+            speed: base.speed + iv.speed as u16,
+            sp_max: base.sp + sp_iv as u16,
+        }
+    }
+}
+
+/// Proveniência criptográfica — o "recibo" forjado do pet (irá pro genesis log/gist).
 #[derive(Debug, Clone, Serialize)]
 pub struct Provenance {
     pub genesis_version: u32,
@@ -78,8 +119,7 @@ pub struct Provenance {
     pub seed_hash: String,
 }
 
-/// Identidade forjada de um pet. (State de gameplay — fome, humor, energia — vem
-/// depois; aqui só o que é determinístico e imutável.)
+/// Identidade forjada de um pet. (HP/SP *atuais* + nível vêm com o state, depois.)
 #[derive(Debug, Clone, Serialize)]
 pub struct Pet {
     pub index: u32,
@@ -88,6 +128,7 @@ pub struct Pet {
     pub shiny: bool,
     pub species: Species,
     pub iv: IV,
+    pub stats: CombatStats,
     pub provenance: Provenance,
 }
 
