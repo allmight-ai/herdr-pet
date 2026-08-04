@@ -1,15 +1,16 @@
-//! Renderer da casinha LCD: **stdout + ANSI** (sem protocolo gráfico — doc do Herdr).
-//! Cores por raridade, sprite 1-bit, barras de HP/SP/IV.
+//! Renderer da casinha LCD: **stdout + ANSI** (sem protocolo gráfico). Cores por
+//! raridade, sprite 1-bit, barras. Alinhamento por **largura de display**
+//! (`unicode-width`) — símbolos/ANSI contam direito.
 
 use crate::pet::{Pet, Rarity};
 use crate::sprites::sprite_for;
+use unicode_width::UnicodeWidthChar;
 
 pub const RESET: &str = "\x1b[0m";
 pub const DIM: &str = "\x1b[2m";
 pub const BOLD: &str = "\x1b[1m";
 
-/// Cor ANSI (256) por raridade; shiny = dourado; **shiny Primordial = iridescente**
-/// (muda a cada frame).
+/// Cor ANSI (256) por raridade; shiny = dourado; shiny Primordial = iridescente.
 pub fn ansi_color(rarity: Rarity, shiny: bool, frame: u32) -> String {
     if shiny && rarity == Rarity::Primordial {
         return rainbow(frame);
@@ -23,11 +24,11 @@ pub fn ansi_color(rarity: Rarity, shiny: bool, frame: u32) -> String {
         Rarity::Rare => "\x1b[38;5;201m".into(),
         Rarity::Epic => "\x1b[38;5;214m".into(),
         Rarity::Legendary => "\x1b[38;5;196m".into(),
-        Rarity::Primordial => "\x1b[1;38;5;129m".into(), // roxo brilhante
+        Rarity::Primordial => "\x1b[1;38;5;129m".into(),
     }
 }
 
-/// Cor iridescente animada (shiny Primordial): cicla matizes vibrantes por frame.
+/// Cor iridescente animada (shiny Primordial): cicla matizes por frame.
 fn rainbow(frame: u32) -> String {
     const HUES: &[u8] = &[201, 213, 177, 129, 99, 92, 165, 53];
     let c = HUES[(frame as usize) % HUES.len()];
@@ -45,9 +46,9 @@ pub fn bar(numer: u16, denom: u16, width: usize) -> String {
     format!("{}{}", "█".repeat(f), "░".repeat(width - f))
 }
 
-/// Comprimento "visual" (ignora escapes ANSI).
-fn visual_len(s: &str) -> usize {
-    let mut len = 0usize;
+/// Largura de DISPLAY (colunas reais no terminal), ignorando escapes ANSI.
+fn display_width(s: &str) -> usize {
+    let mut w = 0usize;
     let mut chars = s.chars();
     while let Some(c) = chars.next() {
         if c == '\x1b' {
@@ -57,14 +58,14 @@ fn visual_len(s: &str) -> usize {
                 }
             }
         } else {
-            len += 1;
+            w += UnicodeWidthChar::width(c).unwrap_or(0);
         }
     }
-    len
+    w
 }
 
 fn row_left(o: &mut String, content: &str, w: usize) {
-    let spaces = w.saturating_sub(visual_len(content));
+    let spaces = w.saturating_sub(display_width(content));
     o.push_str("│ ");
     o.push_str(content);
     o.push_str(&" ".repeat(spaces));
@@ -80,7 +81,7 @@ fn sep(o: &mut String, w: usize) {
 }
 
 fn row_sprite(o: &mut String, visual: &str, color: &str, w: usize) {
-    let vlen = visual.chars().count();
+    let vlen = display_width(visual);
     let inner = w + 2;
     let pad = inner.saturating_sub(vlen) / 2;
     o.push_str("│");
@@ -93,7 +94,7 @@ fn row_sprite(o: &mut String, visual: &str, color: &str, w: usize) {
     o.push_str("│\n");
 }
 
-/// Desenha a casinha LCD completa (frame = passo da animação idle + cor iridescente).
+/// Desenha a casinha LCD completa (frame = animação idle + cor iridescente).
 pub fn render_casinha(pet: &Pet, frame: u32) -> String {
     const W: usize = 26;
     let color = ansi_color(pet.rarity, pet.shiny, frame);
@@ -103,11 +104,13 @@ pub fn render_casinha(pet: &Pet, frame: u32) -> String {
     let mut o = String::new();
     o.push_str(&format!("┌─{}─┐\n", "─".repeat(W)));
 
-    let star = if pet.shiny { " ✨" } else { "" };
-    row_left(&mut o, &format!("{}{}{}", pet.name, star, RESET), W);
+    // nome colorido (cor do tier/shiny)
+    row_left(&mut o, &format!("{}{}{}", color, pet.name, RESET), W);
+    // espécie · tier (+ "(shiny)") — texto puro, alinha sem dor de cabeça
+    let shiny_tag = if pet.shiny { " (shiny)" } else { "" };
     row_left(
         &mut o,
-        &format!("{}{}{} · {}{}{}", pet.species.name, RESET, DIM, color, pet.rarity.as_str(), RESET),
+        &format!("{} · {}{}", pet.species.name, pet.rarity.as_str(), shiny_tag),
         W,
     );
     sep(&mut o, W);
@@ -165,14 +168,13 @@ mod tests {
     }
 
     #[test]
-    fn visual_len_ignores_ansi() {
-        assert_eq!(visual_len("\x1b[38;5;46mabc\x1b[0m"), 3);
-        assert_eq!(visual_len("plain"), 5);
+    fn display_width_ignores_ansi() {
+        assert_eq!(display_width("\x1b[38;5;46mabc\x1b[0m"), 3);
+        assert_eq!(display_width("plain"), 5);
     }
 
     #[test]
     fn primordial_shiny_is_iridescent() {
-        // shiny Primordial muda de cor a cada frame (iridescente)
         let a = ansi_color(Rarity::Primordial, true, 0);
         let b = ansi_color(Rarity::Primordial, true, 1);
         assert_ne!(a, b);
