@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use herdr_pet::{hatch, Pet, GENESIS_VERSION};
+use herdr_pet::{hatch, GENESIS_VERSION};
 
 #[derive(Parser)]
 #[command(name = "herdr-pet", version, about = "Companion V-Pet do Herdr — raridade forjada")]
@@ -28,6 +28,11 @@ enum Cmd {
         #[arg(long, default_value_t = 5)]
         count: u32,
     },
+    /// Casinha LCD ao vivo (loop animado). Usa o state, ou --id pra teste.
+    Watch {
+        #[arg(long)]
+        id: Option<u64>,
+    },
     /// Estado do companion.
     Status,
 }
@@ -39,8 +44,7 @@ fn main() {
             Ok(s) => {
                 println!("✓ Companion inicializado — âncora travada em {}", s.anchor);
                 println!("  Coleção: {} pet(s) chocada(s).", s.hatched.len());
-                let pet = hatch(s.github_id, s.active_index);
-                print_pet(&pet);
+                print_pet(&hatch(s.github_id, s.active_index));
             }
             Err(e) => {
                 eprintln!("erro ao inicializar: {}", e);
@@ -74,16 +78,44 @@ fn main() {
                 );
             }
         }
+        Cmd::Watch { id } => {
+            let (gid, idx) = match (herdr_pet::state::load(), id) {
+                (Some(s), _) => (s.github_id, s.active_index),
+                (None, Some(i)) => (i, 0),
+                (None, None) => {
+                    eprintln!("sem state — rode `init` (ou passe --id N para testar)");
+                    std::process::exit(1);
+                }
+            };
+            use std::io::Write;
+            let mut frame = 0u32;
+            loop {
+                let pet = hatch(gid, idx);
+                print!("\x1b[H\x1b[2J");
+                println!("{}", herdr_pet::render::render_casinha(&pet, frame));
+                println!();
+                println!(
+                    "{}github:{} · pet #{} · Ctrl+C para sair{}",
+                    herdr_pet::render::DIM,
+                    gid,
+                    idx,
+                    herdr_pet::render::RESET
+                );
+                let _ = std::io::stdout().flush();
+                std::thread::sleep(std::time::Duration::from_millis(750));
+                frame = frame.wrapping_add(1);
+            }
+        }
         Cmd::Status => {
             println!("herdr-pet — companion V-Pet do Herdr");
             println!("genesis_version : {}", GENESIS_VERSION);
             println!("raridade        : forjada por âncora GitHub (não sorteada)");
-            println!("subcomandos     : init | hatch --id N | lineage --id N | status");
+            println!("subcomandos     : init | hatch | lineage | watch | status");
         }
     }
 }
 
-fn print_pet(pet: &Pet) {
+fn print_pet(pet: &herdr_pet::Pet) {
     println!("┌─ pet #{} ─────────────────────────────", pet.index);
     println!("│ nome    : {}", pet.name);
     println!(

@@ -9,10 +9,16 @@ platforms = ["linux", "macos"]
 [[build]]
 command = ["cargo", "build", "--release"]
 
-# Ação de demonstração (Fase 1). O pane LCD (watch) e os comandos de gameplay
-# (feed/play/sleep/reborn) entram nas próximas fases.
+# Ação de demonstração (Fase 1). Comandos de gameplay (feed/play/sleep/reborn) entram depois.
 [[actions]]
 id = "status"
 title = "Pet status"
 contexts = ["workspace"]
 command = ["./target/release/herdr-pet", "status"]
+
+# Casinha LCD ao vivo (stdout/ANSI — sem protocolo gráfico, conforme a doc do Herdr).
+[[panes]]
+id = "lcd"
+title = "Pet"
+placement = "split"
+command = ["./target/release/herdr-pet", "watch"]

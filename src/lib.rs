@@ -11,6 +11,8 @@ pub mod crypto;
 pub mod forge;
 pub mod name;
 pub mod pet;
+pub mod render;
+pub mod sprites;
 pub mod state;
 
 pub use catalog::{base_stats_for_tier, species_for_tier, RARITY_ORDER, RARITY_WEIGHTS, SHINY_DENOMINATOR};
