@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Ambientes virtuais
+.venv/
+venv/
+env/
+
+# Secrets / env
+.env
+.env.*
+
+# Estado de runtime do plugin (nunca no repo — raridade é sempre re-derivável da âncora)
+HERDR_PLUGIN_STATE_DIR/
+*.state
+*.lock
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
