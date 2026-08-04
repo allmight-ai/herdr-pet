@@ -361,3 +361,16 @@ skills). Isso exige que as **espécies tenham base stats** (hoje só têm `id/na
   *atuais* + nível = *state* (gameplay — decai em batalha, regenera, sobe com XP).
 - Portanto, o que precisa estar pronto no nascimento é: **base stats** (espécie) + **IVs** (já
   temos). Nível / HP-atual vêm com o state (Fase 2+).
+
+### Skins (cosmético visual) — ideia futura (pensando alto, 2026-08-04)
+Aplicar aparências alternativas como *skins* — incluindo o efeito **iridescente** (rainbow
+animado) do Primordial shiny, **generalizado pra qualquer pet**. É puramente cosmético: muda só o
+visual, **nunca** a raridade/IV/stats.
+
+- **Skin = state** (qual está equipada), **não forjada** — a identidade permanece imutável.
+- Skins cultivadas por **mérito (aura)** ou eventos → combina com a Visão B (progressão visual).
+- **Mecanismo já pronto pra plugar:** `ansi_color(rarity, shiny, frame)` já é parametrizável; basta
+  um `enum Skin { Normal, Iridescent, Metallic, Glitch, ... }` + um campo no state + a render usar
+  a skin. O `rainbow(frame)` **já existe** (reaproveitar).
+- Exemplos plausíveis: Iridescent (rainbow animado), Gold/Metallic, Neon/Glitch, sprites
+  alternativos, skins temáticas.
