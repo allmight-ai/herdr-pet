@@ -348,3 +348,16 @@ ovos do Pokémon. Trade-off consciente.
 - Provável ajuste: **tipos/elementos** (fogo/água/…) nas espécies — hoje as espécies não têm tipo.
   Se batalhas precisarem de fraquezas/resistências, adiciona-se `element` às espécies (ajuste no
   catálogo, **não refazer tudo**).
+
+### Stats de combate (HP/SP) — preocupação levantada (2026-08-04)
+Pra haver batalha, skills dão dano → o pet precisa de **HP** (vida) e **SP** (stamina pra usar
+skills). Isso exige que as **espécies tenham base stats** (hoje só têm `id/name/tier`). Modelagem:
+
+- **Base stats por espécie** (`base_hp, base_atk, base_def, base_sp_atk, base_sp_def, base_speed,
+  base_sp`) → entram no catálogo, forjados.
+- **Stats efetivos** = `f(base + IV + nível)`. No nascimento (nível 1) já são computáveis. Já temos
+  os **IVs**; falta a base.
+- **Separação:** HP_max / SP_max = *capacidade* (derivada de base+IV+nível, determinística); HP/SP
+  *atuais* + nível = *state* (gameplay — decai em batalha, regenera, sobe com XP).
+- Portanto, o que precisa estar pronto no nascimento é: **base stats** (espécie) + **IVs** (já
+  temos). Nível / HP-atual vêm com o state (Fase 2+).
