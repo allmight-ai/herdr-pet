@@ -9,6 +9,7 @@ pub enum Rarity {
     Rare,
     Epic,
     Legendary,
+    Primordial, // acima de legendary; exclusivo (easter egg), não entra nos pesos
 }
 
 impl Rarity {
@@ -19,6 +20,7 @@ impl Rarity {
             Rarity::Rare => "rare",
             Rarity::Epic => "epic",
             Rarity::Legendary => "legendary",
+            Rarity::Primordial => "primordial",
         }
     }
 }

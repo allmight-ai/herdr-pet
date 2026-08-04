@@ -33,7 +33,7 @@ enum Cmd {
         #[arg(long)]
         id: Option<u64>,
     },
-    /// Galeria: um pet de cada tier (+ um shiny) pra ver cores e sprites.
+    /// Galeria: um pet de cada tier (+ shiny + Primordial) pra ver cores e sprites.
     Gallery,
     /// Estado do companion.
     Status,
@@ -90,10 +90,20 @@ fn main() {
                 }
             };
             use std::io::Write;
+            use std::sync::atomic::{AtomicBool, Ordering};
+            use std::sync::Arc;
+            let running = Arc::new(AtomicBool::new(true));
+            let r = running.clone();
+            let _ = ctrlc::set_handler(move || {
+                r.store(false, Ordering::SeqCst);
+            });
+            // alternate screen buffer: não suja nem scrolla o terminal principal
+            print!("\x1b[?1049h");
+            let _ = std::io::stdout().flush();
             let mut frame = 0u32;
-            loop {
+            while running.load(Ordering::SeqCst) {
                 let pet = hatch(gid, idx);
-                print!("\x1b[H\x1b[2J");
+                print!("\x1b[H\x1b[J"); // topo + limpa até o fim (sem scrollar)
                 println!("{}", herdr_pet::render::render_casinha(&pet, frame));
                 println!();
                 println!(
@@ -104,9 +114,17 @@ fn main() {
                     herdr_pet::render::RESET
                 );
                 let _ = std::io::stdout().flush();
-                std::thread::sleep(std::time::Duration::from_millis(750));
+                // sleep em passos pra responder rápido ao Ctrl+C
+                for _ in 0..15 {
+                    if !running.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
                 frame = frame.wrapping_add(1);
             }
+            print!("\x1b[?1049l"); // restaura o buffer principal
+            let _ = std::io::stdout().flush();
         }
         Cmd::Gallery => {
             use herdr_pet::{Pet, Rarity};
@@ -141,9 +159,18 @@ fn main() {
                 }
             }
             if let Some(pet) = shiny {
-                println!("{}✨ Bônus: um SHINY (dourado){}\n", herdr_pet::render::BOLD, herdr_pet::render::RESET);
+                println!("{}✨ Bônus: um SHINY{}\n", herdr_pet::render::BOLD, herdr_pet::render::RESET);
                 println!("{}", herdr_pet::render::render_casinha(&pet, 0));
+                println!();
             }
+            // Easter egg: Primordial exclusivo do criador (shiny iridescente; animado no `watch`)
+            let primordial = hatch(herdr_pet::forge::FREDERICO_ID, 0);
+            println!(
+                "{}✦ Primordial — exclusivo do criador (shiny iridescente){}\n",
+                herdr_pet::render::BOLD,
+                herdr_pet::render::RESET
+            );
+            println!("{}", herdr_pet::render::render_casinha(&primordial, 0));
         }
         Cmd::Status => {
             println!("herdr-pet — companion V-Pet do Herdr");

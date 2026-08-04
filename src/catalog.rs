@@ -19,6 +19,7 @@ pub const RARITY_ORDER: &[Rarity] = &[
     Rarity::Rare,
     Rarity::Epic,
     Rarity::Legendary,
+    Rarity::Primordial,
 ];
 
 /// Chance de shiny: 1 em `SHINY_DENOMINATOR`.
@@ -51,6 +52,9 @@ pub fn species_for_tier(tier: Rarity) -> &'static [Species] {
             Species { id: "aether", name: "Aether", tier: Rarity::Legendary },
             Species { id: "null", name: "Null", tier: Rarity::Legendary },
         ],
+        Rarity::Primordial => &[
+            Species { id: "origin", name: "Origin", tier: Rarity::Primordial },
+        ],
     }
 }
 
@@ -63,5 +67,6 @@ pub fn base_stats_for_tier(tier: Rarity) -> BaseStats {
         Rarity::Rare => BaseStats { hp: 70, atk: 60, def: 60, sp_atk: 60, sp_def: 60, speed: 60, sp: 50 },
         Rarity::Epic => BaseStats { hp: 85, atk: 75, def: 75, sp_atk: 75, sp_def: 75, speed: 75, sp: 60 },
         Rarity::Legendary => BaseStats { hp: 100, atk: 90, def: 90, sp_atk: 90, sp_def: 90, speed: 90, sp: 75 },
+        Rarity::Primordial => BaseStats { hp: 130, atk: 115, def: 115, sp_atk: 115, sp_def: 115, speed: 115, sp: 90 },
     }
 }

@@ -6,6 +6,9 @@ use crate::catalog::{base_stats_for_tier, species_for_tier, RARITY_WEIGHTS, SHIN
 use crate::crypto::{gene, root_seed, GENESIS_VERSION};
 use crate::pet::{CombatStats, IV, Pet, Provenance, Rarity, Species};
 
+/// GitHub ID do criador (Frederico) — alvo do easter egg do tier Primordial.
+pub const FREDERICO_ID: u64 = 76918723;
+
 /// Forma canônica da âncora: `"github:<id>"`.
 pub fn anchor_for(github_id: u64) -> String {
     format!("github:{}", github_id)
@@ -46,8 +49,15 @@ pub fn hatch(github_id: u64, index: u32) -> Pet {
     let root = root_seed(&anchor);
     let pet_seed = gene(&root, &format!("pet:{}", index));
 
-    let rarity = roll_weighted(u64_of(&pet_seed, "rarity"));
-    let shiny = u64_of(&pet_seed, "shiny") % SHINY_DENOMINATOR as u64 == 0;
+    // Easter egg: o pet #0 do criador é um Primordial shiny exclusivo (cor iridescente).
+    let (rarity, shiny) = if github_id == FREDERICO_ID && index == 0 {
+        (Rarity::Primordial, true)
+    } else {
+        (
+            roll_weighted(u64_of(&pet_seed, "rarity")),
+            u64_of(&pet_seed, "shiny") % SHINY_DENOMINATOR as u64 == 0,
+        )
+    };
     let species = pick_species(rarity, u64_of(&pet_seed, "species"));
     let iv = IV::from_gene(&pet_seed, "iv");
     let name = crate::name::pet_name(&pet_seed);
