@@ -294,3 +294,37 @@ Implementar R2 agora nesse formato **deixa a coleção como toggle futuro quase 
 
 > TODO: o rascunho do README acima (Visão A, "1 pet") precisa ser reescrito pra Visão B quando o
 > design estabilizar. Anti-reroll / lock-in / gênese por âncora seguem válidos.
+
+---
+
+## Futuro: Breeding estilo Pokémon (adaptado ao determinismo)
+
+**Diretriz (2026-08-04):** o breeding seguirá as **regras de Pokémon** (comunidade competitive
+breeding é grande e as regras são consagradas), porém **adaptado ao nosso modelo determinístico e
+não-resetável**. É **endgame** — só depois do farm/aura (Fase 3) e da coleção (Fase 5+). NÃO
+implementar agora.
+
+### Regras de Pokémon a portar
+- **6 IVs** (HP, Atk, Def, Sp.Atk, Sp.Def, Speed), 0–31 cada.
+- **25 Natures**: +10% num stat, -10% em outro.
+- **Herança de IV**: ~3 de 12 vêm dos pais (Destiny Knot = 5 herdados).
+- **Nature herdável** (Everstone = 100% de um pai).
+- **Masuda Method**: pais "diferentes" aumentam chance de shiny.
+
+### A adaptação CRÍTICA (sem virar reroll)
+Pokémon breeding é **RNG** (centenas de ovos rerollando). O nosso é **determinístico + custoso**: o
+filho é forjado por `(hash dos pais, breed_counter)` e **custa aura** (e/ou consome um pai), de
+forma **irreversível**. Não há reroll de ovos — a "busca" é **estratégica** (quais pais cruzar,
+gestão de aura/contador), não grind. Preserva a tese (não-resetável) ao custo de não ter o farm de
+ovos do Pokémon. Trade-off consciente.
+
+### Modelo recomendado (híbrido)
+- Filho de **tier superior** (Mythic/Divine — só acessível via breeding, jamais na forja normal) +
+  herda **IV/nature dos pais** (Pokémon-style).
+- `child_seed = gene(combine(parent_a.seed, parent_b.seed, breed_counter), "breed")`
+- Combina o endgame de tier superior (estilo idle) com a profundidade genética (Pokémon).
+
+### Decisões em aberto (quando retomar)
+- **Puro-Pokémon** (mesma espécie, só aperfeiçoa IV) vs **sobe-tier** (Mythic+) → proposto: híbrido.
+- Quantos IVs herdam por padrão; se há "itens" consumíveis (Destiny Knot / Everstone) via aura.
+- Egg groups (faz sentido com poucas espécies?) ou "qualquer um cruza com qualquer um".
