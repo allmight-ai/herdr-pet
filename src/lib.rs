@@ -16,7 +16,7 @@ pub mod render;
 pub mod sprites;
 pub mod state;
 
-pub use agent::AgentStatus;
+pub use agent::{AgentInfo, AgentStatus};
 pub use catalog::{base_stats_for_tier, species_for_tier, RARITY_ORDER, RARITY_WEIGHTS, SHINY_DENOMINATOR};
 pub use crypto::{gene, hmac_sha256, root_seed, APP_SALT, GENESIS_VERSION};
 pub use name::pet_name;

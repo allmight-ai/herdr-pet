@@ -121,21 +121,25 @@ fn main() {
             let pet = hatch(gid, idx);
             let mut frame = 0u32;
             let mut status = forced.unwrap_or(herdr_pet::AgentStatus::Idle);
-            let mut last_sig: Option<(herdr_pet::AgentStatus, u32)> = None;
+            let mut title: Option<String> = None;
+            let mut last_sig: Option<(herdr_pet::AgentStatus, u32, Option<String>)> = None;
             while running.load(Ordering::SeqCst) {
-                // Poll do agent_status a cada ~3s (3 ticks × ~0,8s) — só sem --mood.
+                // Poll do agente a cada ~3s (3 ticks × ~0,8s) — status + tarefa. Só sem --mood.
                 if forced.is_none() && frame % 3 == 0 {
-                    if let Some(s) = herdr_pet::agent::focused_agent_status() {
-                        status = s;
+                    if let Some(info) = herdr_pet::agent::focused_agent_info() {
+                        status = info.status;
+                        title = info.title;
                     }
                 }
-                // Redraw só quando algo visível muda: status ou fase da animação.
-                // Pets estáticos (idle/blocked) só redesenham quando o status muda.
+                // Redraw só quando algo visível muda: status, tarefa ou fase da animação.
                 let period = herdr_pet::render::animation_period(status, &pet);
-                let sig = (status, frame % period);
-                if last_sig != Some(sig) {
+                let sig = (status, frame % period, title.clone());
+                if last_sig.as_ref() != Some(&sig) {
                     print!("\x1b[H\x1b[J"); // topo + limpa até o fim (sem scrollar)
-                    println!("{}", herdr_pet::render::render_casinha(&pet, frame, status));
+                    println!(
+                        "{}",
+                        herdr_pet::render::render_casinha(&pet, frame, status, title.as_deref())
+                    );
                     println!();
                     println!(
                         "{}github:{} · pet #{} · Ctrl+C para sair{}",
@@ -194,13 +198,19 @@ fn main() {
             );
             for tier in order {
                 if let Some(pet) = by_tier.get(&tier) {
-                    println!("{}", herdr_pet::render::render_casinha(pet, 0, herdr_pet::AgentStatus::Idle));
+                    println!(
+                        "{}",
+                        herdr_pet::render::render_casinha(pet, 0, herdr_pet::AgentStatus::Idle, None)
+                    );
                     println!();
                 }
             }
             if let Some(pet) = shiny {
                 println!("{}✨ Bônus: um SHINY{}\n", herdr_pet::render::BOLD, herdr_pet::render::RESET);
-                println!("{}", herdr_pet::render::render_casinha(&pet, 0, herdr_pet::AgentStatus::Idle));
+                println!(
+                    "{}",
+                    herdr_pet::render::render_casinha(&pet, 0, herdr_pet::AgentStatus::Idle, None)
+                );
                 println!();
             }
             // Easter egg: Primordial exclusivo do criador (shiny iridescente; animado no `watch`)
@@ -210,7 +220,10 @@ fn main() {
                 herdr_pet::render::BOLD,
                 herdr_pet::render::RESET
             );
-            println!("{}", herdr_pet::render::render_casinha(&primordial, 0, herdr_pet::AgentStatus::Idle));
+            println!(
+                "{}",
+                herdr_pet::render::render_casinha(&primordial, 0, herdr_pet::AgentStatus::Idle, None)
+            );
         }
         Cmd::Status => {
             println!("herdr-pet — companion V-Pet do Herdr");

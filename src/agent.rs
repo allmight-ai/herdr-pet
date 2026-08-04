@@ -74,12 +74,20 @@ struct AgentEntry {
     focused: bool,
     #[serde(default)]
     workspace_id: Option<String>,
+    #[serde(default)]
+    terminal_title_stripped: Option<String>,
 }
 
-/// Status do agente que o pet deve espelhar: o **focado** (o que o programador
-/// está dirigindo); senão o do mesmo workspace do pane; senão o primeiro.
-/// `None` se não há agente ou a leitura falhar.
-pub fn focused_agent_status() -> Option<AgentStatus> {
+/// Info do agente que o pet acompanha: status + tarefa atual (terminal_title_stripped).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentInfo {
+    pub status: AgentStatus,
+    pub title: Option<String>,
+}
+
+/// Agente que o pet deve espelhar: o **focado** (o que o programador dirige); senão o
+/// do mesmo workspace do pane; senão o primeiro. `None` se não há agente ou a leitura falhar.
+pub fn focused_agent_info() -> Option<AgentInfo> {
     let stdout = run_herdr(&["agent", "list"])?;
     let env: Envelope = serde_json::from_slice(&stdout).ok()?;
     let agents = env.result.agents;
@@ -92,7 +100,20 @@ pub fn focused_agent_status() -> Option<AgentStatus> {
         .find(|a| a.focused)
         .or_else(|| agents.iter().find(|a| a.workspace_id.as_deref() == ws.as_deref()))
         .or_else(|| agents.first())?;
-    Some(AgentStatus::from_herdr(&pick.agent_status))
+    let title = pick
+        .terminal_title_stripped
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    Some(AgentInfo {
+        status: AgentStatus::from_herdr(&pick.agent_status),
+        title,
+    })
+}
+
+/// Só o status (compat). Veja `focused_agent_info` pra status + tarefa.
+pub fn focused_agent_status() -> Option<AgentStatus> {
+    focused_agent_info().map(|i| i.status)
 }
 
 #[cfg(test)]

@@ -74,6 +74,25 @@ fn char_width(c: char) -> usize {
     UnicodeWidthChar::width(c).unwrap_or(0)
 }
 
+/// Trunca `s` pra caber em `max` colunas de display, com "…" no fim se passar.
+fn truncate_display(s: &str, max: usize) -> String {
+    if display_width(s) <= max {
+        return s.to_string();
+    }
+    let mut out = String::new();
+    let mut w = 0usize;
+    for c in s.chars() {
+        let cw = char_width(c);
+        if w + cw + 1 > max {
+            break;
+        }
+        w += cw;
+        out.push(c);
+    }
+    out.push('…');
+    out
+}
+
 fn row_left(o: &mut String, content: &str, w: usize) {
     let spaces = w.saturating_sub(display_width(content));
     o.push_str("│ ");
@@ -141,9 +160,9 @@ pub fn animation_period(status: AgentStatus, pet: &Pet) -> u32 {
     }
 }
 
-/// Desenha a casinha LCD completa. `status` = estado do agente espelhado (drive
-/// o mood + o bounce do sprite); `frame` = animação idle + cor iridescente.
-pub fn render_casinha(pet: &Pet, frame: u32, status: AgentStatus) -> String {
+/// Desenha a casinha LCD completa. `status` = estado do agente espelhado (drive o mood +
+/// o bounce do sprite); `task` = tarefa atual do agente (linha dim, se houver); `frame` = animação.
+pub fn render_casinha(pet: &Pet, frame: u32, status: AgentStatus, task: Option<&str>) -> String {
     const W: usize = 28;
     let color = ansi_color(pet.rarity, pet.shiny, frame);
     let sprite = sprite_for(pet.species.id);
@@ -168,6 +187,14 @@ pub fn render_casinha(pet: &Pet, frame: u32, status: AgentStatus) -> String {
         &format!("{} · {}{}", pet.species.name, pet.rarity.as_title(), shiny_tag),
         W,
     );
+    // tarefa atual do agente (se houver) — dim, truncada pra caber
+    if let Some(t) = task {
+        row_left(
+            &mut o,
+            &format!("{DIM}{}{RESET}", truncate_display(&format!("» {t}"), W)),
+            W,
+        );
+    }
     sep(&mut o, W);
 
     // Área do sprite: flair animado (acima, na última linha em branco) + sprite (bounce).
