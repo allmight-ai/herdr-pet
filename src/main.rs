@@ -110,10 +110,18 @@ fn main() {
             print!("\x1b[?1049h");
             let _ = std::io::stdout().flush();
             let mut frame = 0u32;
+            let mut status = herdr_pet::AgentStatus::Idle;
             while running.load(Ordering::SeqCst) {
                 let pet = hatch(gid, idx);
+                // Poll do agent_status a cada ~3s (4 frames × ~750ms). Detecção do Herdr
+                // tem latência de segundos mesmo; entre polls, reusa o último lido.
+                if frame % 4 == 0 {
+                    if let Some(s) = herdr_pet::agent::focused_agent_status() {
+                        status = s;
+                    }
+                }
                 print!("\x1b[H\x1b[J"); // topo + limpa até o fim (sem scrollar)
-                println!("{}", herdr_pet::render::render_casinha(&pet, frame));
+                println!("{}", herdr_pet::render::render_casinha(&pet, frame, status));
                 println!();
                 println!(
                     "{}github:{} · pet #{} · Ctrl+C para sair{}",
@@ -163,13 +171,13 @@ fn main() {
             );
             for tier in order {
                 if let Some(pet) = by_tier.get(&tier) {
-                    println!("{}", herdr_pet::render::render_casinha(pet, 0));
+                    println!("{}", herdr_pet::render::render_casinha(pet, 0, herdr_pet::AgentStatus::Idle));
                     println!();
                 }
             }
             if let Some(pet) = shiny {
                 println!("{}✨ Bônus: um SHINY{}\n", herdr_pet::render::BOLD, herdr_pet::render::RESET);
-                println!("{}", herdr_pet::render::render_casinha(&pet, 0));
+                println!("{}", herdr_pet::render::render_casinha(&pet, 0, herdr_pet::AgentStatus::Idle));
                 println!();
             }
             // Easter egg: Primordial exclusivo do criador (shiny iridescente; animado no `watch`)
@@ -179,7 +187,7 @@ fn main() {
                 herdr_pet::render::BOLD,
                 herdr_pet::render::RESET
             );
-            println!("{}", herdr_pet::render::render_casinha(&primordial, 0));
+            println!("{}", herdr_pet::render::render_casinha(&primordial, 0, herdr_pet::AgentStatus::Idle));
         }
         Cmd::Status => {
             println!("herdr-pet — companion V-Pet do Herdr");

@@ -2,6 +2,7 @@
 //! raridade, sprite 1-bit, barras. Alinhamento por **largura de display**
 //! (`unicode-width`) — símbolos/ANSI contam direito.
 
+use crate::agent::AgentStatus;
 use crate::pet::{Pet, Rarity};
 use crate::sprites::sprite_for;
 use unicode_width::UnicodeWidthChar;
@@ -94,12 +95,31 @@ fn row_sprite(o: &mut String, visual: &str, color: &str, w: usize) {
     o.push_str("│\n");
 }
 
-/// Desenha a casinha LCD completa (frame = animação idle + cor iridescente).
-pub fn render_casinha(pet: &Pet, frame: u32) -> String {
+/// Mood do pet (label + cor ANSI) derivado do status do agente que ele espelha.
+/// Reação puramente cosmética (v1) — sem progressão.
+fn mood_of(status: AgentStatus) -> (&'static str, &'static str) {
+    match status {
+        AgentStatus::Working => ("« treinando »", "\x1b[38;5;46m"),     // verde, energizado
+        AgentStatus::Done => ("★ comemorando! ★", "\x1b[1;38;5;220m"), // dourado
+        AgentStatus::Blocked => ("?  curioso  ?", "\x1b[38;5;214m"),   // laranja, alerta
+        AgentStatus::Idle => ("z z z  dormindo", "\x1b[2;38;5;245m"),  // cinza, sono
+        AgentStatus::Unknown => (". . .", "\x1b[2;38;5;245m"),         // cinza, neutro
+    }
+}
+
+/// Desenha a casinha LCD completa. `status` = estado do agente espelhado (drive
+/// o mood + o bounce do sprite); `frame` = animação idle + cor iridescente.
+pub fn render_casinha(pet: &Pet, frame: u32, status: AgentStatus) -> String {
     const W: usize = 26;
     let color = ansi_color(pet.rarity, pet.shiny, frame);
     let sprite = sprite_for(pet.species.id);
-    let bounce = if frame % 4 >= 2 { 1 } else { 0 };
+    // Bounce por mood: working/done = animado; blocked/idle = parado; unknown = idle padrão.
+    let bounce = match status {
+        AgentStatus::Working | AgentStatus::Done => (frame % 2) as usize,
+        AgentStatus::Blocked | AgentStatus::Idle => 0,
+        AgentStatus::Unknown => usize::from(frame % 4 >= 2),
+    };
+    let (mood, mood_color) = mood_of(status);
 
     let mut o = String::new();
     o.push_str(&format!("┌─{}─┐\n", "─".repeat(W)));
@@ -124,6 +144,8 @@ pub fn render_casinha(pet: &Pet, frame: u32) -> String {
     for _ in 0..(2usize.saturating_sub(bounce)) {
         blank(&mut o, W);
     }
+    // mood do pet — label centralizado + cor, reage ao status do agente
+    row_sprite(&mut o, mood, mood_color, W);
     sep(&mut o, W);
 
     row_left(
