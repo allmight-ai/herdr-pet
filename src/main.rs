@@ -85,8 +85,17 @@ fn main() {
                 (Some(s), _) => (s.github_id, s.active_index),
                 (None, Some(i)) => (i, 0),
                 (None, None) => {
-                    eprintln!("sem state — rode `init` (ou passe --id N para testar)");
-                    std::process::exit(1);
+                    // auto-init: resolve o GitHub e cria o state (pra o pane funcionar de cara)
+                    match herdr_pet::anchor::ensure_locked_state() {
+                        Ok(s) => (s.github_id, s.active_index),
+                        Err(e) => {
+                            eprintln!(
+                                "sem state e não consegui resolver o GitHub: {}\n(rode `herdr-pet init` ou passe --id N)",
+                                e
+                            );
+                            std::process::exit(1);
+                        }
+                    }
                 }
             };
             use std::io::Write;
