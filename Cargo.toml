@@ -1,0 +1,22 @@
+[package]
+name = "herdr-pet"
+version = "0.1.0"
+edition = "2021"
+description = "Companion V-Pet do Herdr — coleção forjada por mérito"
+license = "MIT"
+
+[[bin]]
+name = "herdr-pet"
+path = "src/main.rs"
+
+[lib]
+name = "herdr_pet"
+path = "src/lib.rs"
+
+[dependencies]
+sha2 = "0.10"
+hmac = "0.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"
+clap = { version = "4", features = ["derive"] }
