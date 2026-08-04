@@ -328,3 +328,23 @@ ovos do Pokémon. Trade-off consciente.
 - **Puro-Pokémon** (mesma espécie, só aperfeiçoa IV) vs **sobe-tier** (Mythic+) → proposto: híbrido.
 - Quantos IVs herdam por padrão; se há "itens" consumíveis (Destiny Knot / Everstone) via aura.
 - Egg groups (faz sentido com poucas espécies?) ou "qualquer um cruza com qualquer um".
+
+---
+
+## Futuro: Skills + Batalhas
+
+**Diretriz (2026-08-04):** skills (golpes estilo Pokémon) virão **juntas com um sistema de batalha**
+(ex: batalhar contra PRs, como já imaginado). Não implementar agora.
+
+**A fundação JÁ suporta plug-in (não é começar do zero):**
+- Skills inatas podem ser **forjadas** como qualquer gene: `gene(pet_seed, "skills")`.
+- Adicionar `skills: Vec<Skill>` ao `Pet` é trivial e **não quebra** pets existentes (sub-seeds
+  independentes + `genesis_version`).
+- Catálogo de skills segue o padrão de `catalog.rs`.
+
+**O que faltará quando chegar a hora:**
+- Catálogo de skills (nomes, dano, efeito) — trabalho novo, mas no molde existente.
+- Sistema de combate (onde skills se usam) — a parte grande, nova.
+- Provável ajuste: **tipos/elementos** (fogo/água/…) nas espécies — hoje as espécies não têm tipo.
+  Se batalhas precisarem de fraquezas/resistências, adiciona-se `element` às espécies (ajuste no
+  catálogo, **não refazer tudo**).

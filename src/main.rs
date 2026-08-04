@@ -10,7 +10,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Forja e mostra o pet de um índice (default 0 = nascimento).
+    /// Inicializa o companion: resolve seu GitHub, trava a âncora (lock-in) e choça o pet #0.
+    Init,
+    /// Forja e mostra o pet de um índice (default 0 = nascimento). [dev, sem state]
     Hatch {
         #[arg(long)]
         id: u64,
@@ -19,7 +21,7 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Mostra os primeiros N pets da coleção (linha do tempo de renascimentos).
+    /// Mostra os primeiros N pets da coleção (linha do tempo de renascimentos). [dev]
     Lineage {
         #[arg(long)]
         id: u64,
@@ -33,6 +35,18 @@ enum Cmd {
 fn main() {
     let cli = Cli::parse();
     match cli.cmd.unwrap_or(Cmd::Status) {
+        Cmd::Init => match herdr_pet::anchor::ensure_locked_state() {
+            Ok(s) => {
+                println!("✓ Companion inicializado — âncora travada em {}", s.anchor);
+                println!("  Coleção: {} pet(s) chocada(s).", s.hatched.len());
+                let pet = hatch(s.github_id, s.active_index);
+                print_pet(&pet);
+            }
+            Err(e) => {
+                eprintln!("erro ao inicializar: {}", e);
+                std::process::exit(1);
+            }
+        },
         Cmd::Hatch { id, index, json } => {
             let pet = hatch(id, index);
             if json {
@@ -66,7 +80,7 @@ fn main() {
             println!("herdr-pet — companion V-Pet do Herdr");
             println!("genesis_version : {}", GENESIS_VERSION);
             println!("raridade        : forjada por âncora GitHub (não sorteada)");
-            println!("subcomandos     : hatch --id N | lineage --id N | status");
+            println!("subcomandos     : init | hatch --id N | lineage --id N | status");
         }
     }
 }
