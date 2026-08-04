@@ -36,6 +36,9 @@ enum Cmd {
         #[arg(long)]
         mood: Option<String>,
     },
+    /// Abre o pet como split pequeno sob demanda (pro hotkey). Dockado embaixo do pane
+    /// atual (~16 linhas) e refoca o pane original. Leve: o watch só roda aberto.
+    Open,
     /// Galeria: um pet de cada tier (+ shiny + Primordial) pra ver cores e sprites.
     Gallery,
     /// Estado do companion.
@@ -113,30 +116,39 @@ fn main() {
             // alternate screen buffer: não suja nem scrolla o terminal principal
             print!("\x1b[?1049h");
             let _ = std::io::stdout().flush();
+            // Otimização: o pet é imutável pra (gid, idx) — forja UMA vez, cacheia.
+            // (antes re-forjava a cada frame, à toa.)
+            let pet = hatch(gid, idx);
             let mut frame = 0u32;
             let mut status = forced.unwrap_or(herdr_pet::AgentStatus::Idle);
+            let mut last_sig: Option<(herdr_pet::AgentStatus, u32)> = None;
             while running.load(Ordering::SeqCst) {
-                let pet = hatch(gid, idx);
-                // Poll do agent_status a cada ~3s (4 frames × ~750ms) — só sem --mood.
-                // Detecção do Herdr tem latência de segundos; entre polls, reusa o último.
-                if forced.is_none() && frame % 4 == 0 {
+                // Poll do agent_status a cada ~3s (3 ticks × ~0,8s) — só sem --mood.
+                if forced.is_none() && frame % 3 == 0 {
                     if let Some(s) = herdr_pet::agent::focused_agent_status() {
                         status = s;
                     }
                 }
-                print!("\x1b[H\x1b[J"); // topo + limpa até o fim (sem scrollar)
-                println!("{}", herdr_pet::render::render_casinha(&pet, frame, status));
-                println!();
-                println!(
-                    "{}github:{} · pet #{} · Ctrl+C para sair{}",
-                    herdr_pet::render::DIM,
-                    gid,
-                    idx,
-                    herdr_pet::render::RESET
-                );
-                let _ = std::io::stdout().flush();
-                // sleep em passos pra responder rápido ao Ctrl+C
-                for _ in 0..15 {
+                // Redraw só quando algo visível muda: status ou fase da animação.
+                // Pets estáticos (idle/blocked) só redesenham quando o status muda.
+                let period = herdr_pet::render::animation_period(status, &pet);
+                let sig = (status, frame % period);
+                if last_sig != Some(sig) {
+                    print!("\x1b[H\x1b[J"); // topo + limpa até o fim (sem scrollar)
+                    println!("{}", herdr_pet::render::render_casinha(&pet, frame, status));
+                    println!();
+                    println!(
+                        "{}github:{} · pet #{} · Ctrl+C para sair{}",
+                        herdr_pet::render::DIM,
+                        gid,
+                        idx,
+                        herdr_pet::render::RESET
+                    );
+                    let _ = std::io::stdout().flush();
+                    last_sig = Some(sig);
+                }
+                // sleep em passos pra responder rápido ao Ctrl+C (~0,8s/ciclo)
+                for _ in 0..16 {
                     if !running.load(Ordering::SeqCst) {
                         break;
                     }
@@ -147,6 +159,13 @@ fn main() {
             print!("\x1b[?1049l"); // restaura o buffer principal
             let _ = std::io::stdout().flush();
         }
+        Cmd::Open => match open_pet_small() {
+            Ok(()) => {}
+            Err(e) => {
+                eprintln!("erro ao abrir o pet: {e}");
+                std::process::exit(1);
+            }
+        },
         Cmd::Gallery => {
             use herdr_pet::{Pet, Rarity};
             use std::collections::HashMap;
@@ -231,4 +250,98 @@ fn print_pet(pet: &herdr_pet::Pet) {
     println!("│ seed    : {}…", &pet.provenance.seed_hash[..12]);
     println!("│ versão  : {}", pet.provenance.genesis_version);
     println!("└──────────────────────────────────────────");
+}
+
+/// Caminho do CLI `herdr`: HERDR_BIN_PATH → `herdr` no PATH → `~/.local/bin/herdr`.
+fn herdr_bin() -> String {
+    if let Ok(b) = std::env::var("HERDR_BIN_PATH") {
+        return b;
+    }
+    if std::process::Command::new("herdr").arg("--version").output().is_ok() {
+        return "herdr".to_string();
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        return format!("{home}/.local/bin/herdr");
+    }
+    "herdr".to_string()
+}
+
+/// Acha o pane do pet (label "Pet") no workspace atual, se existir.
+fn pet_pane_in_workspace() -> Result<Option<String>, String> {
+    let bin = herdr_bin();
+    let ws = std::env::var("HERDR_WORKSPACE_ID").ok();
+    let out = std::process::Command::new(&bin)
+        .args(["pane", "list"])
+        .output()
+        .map_err(|e| format!("herdr pane list: {e}"))?;
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_default();
+    Ok(v["result"]["panes"]
+        .as_array()
+        .and_then(|a| {
+            a.iter()
+                .find(|p| {
+                    p.get("label").and_then(|l| l.as_str()) == Some("Pet")
+                        && p.get("workspace_id").and_then(|w| w.as_str()) == ws.as_deref()
+                })
+                .and_then(|p| p["pane_id"].as_str().map(String::from))
+        }))
+}
+
+/// **Toggle** do pet (pro hotkey): se já existe um pane do pet neste workspace, fecha;
+/// senão abre como split pequeno dockado (~16 linhas) e refoca o pane original.
+/// Leve — o `watch` só roda enquanto aberto.
+fn open_pet_small() -> Result<(), String> {
+    const PLUGIN_ID: &str = "fredericotmello.herdr-pet";
+    let bin = herdr_bin();
+
+    // Toggle: pet já existe neste workspace → fecha.
+    if let Some(existing) = pet_pane_in_workspace()? {
+        let _ = std::process::Command::new(&bin)
+            .args(["plugin", "pane", "close", &existing])
+            .output();
+        println!("✓ pet fechado ({existing}).");
+        return Ok(());
+    }
+
+    let target = std::env::var("HERDR_PANE_ID")
+        .map_err(|_| "HERDR_PANE_ID ausente — rode dentro de um painel do Herdr.".to_string())?;
+
+    // 1) abre o pet dockado abaixo do pane atual (split)
+    let out = std::process::Command::new(&bin)
+        .args([
+            "plugin", "pane", "open", "--plugin", PLUGIN_ID, "--entrypoint", "lcd",
+            "--placement", "split", "--target-pane", &target, "--direction", "down",
+        ])
+        .output()
+        .map_err(|e| format!("não consegui rodar `herdr`: {e}"))?;
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .map_err(|_| format!("resposta inesperada: {}", String::from_utf8_lossy(&out.stdout)))?;
+    let pet = v["result"]["plugin_pane"]["pane"]["pane_id"]
+        .as_str()
+        .ok_or("não veio o pane_id do pet")?
+        .to_string();
+
+    // 2) encolhe até ~16 linhas (resize down em passos pequenos)
+    for _ in 0..12 {
+        let r = std::process::Command::new(&bin)
+            .args(["pane", "resize", "--pane", &pet, "--direction", "down", "--amount", "0.02"])
+            .output()
+            .map_err(|e| format!("herdr resize: {e}"))?;
+        let rv: serde_json::Value = serde_json::from_slice(&r.stdout).unwrap_or_default();
+        let h = rv["result"]["resize"]["layout"]["panes"]
+            .as_array()
+            .and_then(|a| a.iter().find(|p| p["pane_id"].as_str() == Some(&pet)))
+            .and_then(|p| p["rect"]["height"].as_u64());
+        if matches!(h, Some(h) if h <= 17) {
+            break;
+        }
+    }
+
+    // 3) refoca o pane original (vizinho de cima do pet)
+    let _ = std::process::Command::new(&bin)
+        .args(["pane", "focus", "--pane", &pet, "--direction", "up"])
+        .output();
+
+    println!("✓ pet aberto ({pet}) — dockado embaixo, ~16 linhas. Ctrl+C no pane do pet fecha.");
+    Ok(())
 }

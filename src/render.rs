@@ -126,6 +126,21 @@ fn flair(status: AgentStatus, frame: u32) -> Option<&'static str> {
     }
 }
 
+/// Período (em frames) em que o render MUDA — cadência mínima de redraw.
+/// `1` = estático (idle/blocked: só redesenha quando o status muda); `>1` = anima.
+/// Usado p/ pular redraws quando nada visível mudou (otimização do loop watch).
+pub fn animation_period(status: AgentStatus, pet: &Pet) -> u32 {
+    if pet.shiny && pet.rarity == Rarity::Primordial {
+        8 // iridescente: 8 matizes (ciclo lento)
+    } else {
+        match status {
+            AgentStatus::Working | AgentStatus::Done => 2, // bounce
+            AgentStatus::Unknown => 4,                     // bounce lento
+            AgentStatus::Idle | AgentStatus::Blocked => 1, // estático
+        }
+    }
+}
+
 /// Desenha a casinha LCD completa. `status` = estado do agente espelhado (drive
 /// o mood + o bounce do sprite); `frame` = animação idle + cor iridescente.
 pub fn render_casinha(pet: &Pet, frame: u32, status: AgentStatus) -> String {
