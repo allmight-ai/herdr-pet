@@ -32,6 +32,9 @@ enum Cmd {
     Watch {
         #[arg(long)]
         id: Option<u64>,
+        /// Força um mood (working/done/blocked/idle/unknown) — dev/teste; pula o poll do agente.
+        #[arg(long)]
+        mood: Option<String>,
     },
     /// Galeria: um pet de cada tier (+ shiny + Primordial) pra ver cores e sprites.
     Gallery,
@@ -80,7 +83,8 @@ fn main() {
                 );
             }
         }
-        Cmd::Watch { id } => {
+        Cmd::Watch { id, mood } => {
+            let forced = mood.as_deref().map(herdr_pet::AgentStatus::from_herdr);
             let (gid, idx) = match (herdr_pet::state::load(), id) {
                 (Some(s), _) => (s.github_id, s.active_index),
                 (None, Some(i)) => (i, 0),
@@ -110,12 +114,12 @@ fn main() {
             print!("\x1b[?1049h");
             let _ = std::io::stdout().flush();
             let mut frame = 0u32;
-            let mut status = herdr_pet::AgentStatus::Idle;
+            let mut status = forced.unwrap_or(herdr_pet::AgentStatus::Idle);
             while running.load(Ordering::SeqCst) {
                 let pet = hatch(gid, idx);
-                // Poll do agent_status a cada ~3s (4 frames × ~750ms). Detecção do Herdr
-                // tem latência de segundos mesmo; entre polls, reusa o último lido.
-                if frame % 4 == 0 {
+                // Poll do agent_status a cada ~3s (4 frames × ~750ms) — só sem --mood.
+                // Detecção do Herdr tem latência de segundos; entre polls, reusa o último.
+                if forced.is_none() && frame % 4 == 0 {
                     if let Some(s) = herdr_pet::agent::focused_agent_status() {
                         status = s;
                     }

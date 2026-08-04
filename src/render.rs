@@ -107,6 +107,16 @@ fn mood_of(status: AgentStatus) -> (&'static str, &'static str) {
     }
 }
 
+/// Flair animado acima do sprite, por status. LCD-consistente (ascii/block).
+fn flair(status: AgentStatus, frame: u32) -> Option<&'static str> {
+    match status {
+        AgentStatus::Idle => Some("z  z"),                                    // sono
+        AgentStatus::Done => Some(if frame % 2 == 0 { "*  *" } else { "  * " }), // sparkles piscando
+        AgentStatus::Unknown => Some("?"),                                    // confuso
+        AgentStatus::Working | AgentStatus::Blocked => None, // working = bounce; blocked = alerta parado
+    }
+}
+
 /// Desenha a casinha LCD completa. `status` = estado do agente espelhado (drive
 /// o mood + o bounce do sprite); `frame` = animação idle + cor iridescente.
 pub fn render_casinha(pet: &Pet, frame: u32, status: AgentStatus) -> String {
@@ -126,8 +136,9 @@ pub fn render_casinha(pet: &Pet, frame: u32, status: AgentStatus) -> String {
 
     // nome colorido (cor do tier/shiny)
     row_left(&mut o, &format!("{}{}{}", color, pet.name, RESET), W);
-    // espécie · tier (+ "(shiny)") — texto puro, alinha sem dor de cabeça
-    let shiny_tag = if pet.shiny { " (shiny)" } else { "" };
+    // espécie · tier (+ "✦" se shiny). Marcador compacto: "(shiny)" estourava a
+    // largura em tiers longos (ex.: "Origin · primordial (shiny)" = 27 > 26).
+    let shiny_tag = if pet.shiny { " ✦" } else { "" };
     row_left(
         &mut o,
         &format!("{} · {}{}", pet.species.name, pet.rarity.as_str(), shiny_tag),
@@ -135,7 +146,15 @@ pub fn render_casinha(pet: &Pet, frame: u32, status: AgentStatus) -> String {
     );
     sep(&mut o, W);
 
-    for _ in 0..(2 + bounce) {
+    // Área do sprite: flair animado (acima, na última linha em branco) + sprite (bounce).
+    let above = 2 + bounce;
+    for i in 0..above {
+        if i + 1 == above {
+            if let Some(f) = flair(status, frame) {
+                row_sprite(&mut o, f, mood_color, W);
+                continue;
+            }
+        }
         blank(&mut o, W);
     }
     for line in sprite {
@@ -146,33 +165,6 @@ pub fn render_casinha(pet: &Pet, frame: u32, status: AgentStatus) -> String {
     }
     // mood do pet — label centralizado + cor, reage ao status do agente
     row_sprite(&mut o, mood, mood_color, W);
-    sep(&mut o, W);
-
-    row_left(
-        &mut o,
-        &format!("HP {} {:>3}", bar(pet.stats.hp_max, pet.stats.hp_max, 12), pet.stats.hp_max),
-        W,
-    );
-    row_left(
-        &mut o,
-        &format!("SP {} {:>3}", bar(pet.stats.sp_max, pet.stats.sp_max, 12), pet.stats.sp_max),
-        W,
-    );
-    row_left(
-        &mut o,
-        &format!("IV {} {:>3}/186", bar(pet.iv.total(), 186, 12), pet.iv.total()),
-        W,
-    );
-    row_left(
-        &mut o,
-        &format!("ATK {}  DEF {}  SpA {}", pet.stats.atk, pet.stats.def, pet.stats.sp_atk),
-        W,
-    );
-    row_left(
-        &mut o,
-        &format!("SpD {}  SPE {}", pet.stats.sp_def, pet.stats.speed),
-        W,
-    );
 
     o.push_str(&format!("└─{}─┘", "─".repeat(W)));
     o
