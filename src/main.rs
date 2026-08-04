@@ -43,12 +43,13 @@ fn main() {
         }
         Cmd::Lineage { id, count } => {
             println!("Coleção forjada de github:{} (genesis v{})", id, GENESIS_VERSION);
-            println!("{:-<56}", "");
+            println!("{:-<64}", "");
             for i in 0..count {
                 let pet = hatch(id, i);
                 println!(
-                    "  #{:<3} {:<10} {:<8}{} IV {:>2}/{:>2}/{:>2}/{:>2}  {}",
+                    "  #{:<3} {:<16} {:<10} {:<8}{} IV {:>2}/{:>2}/{:>2}/{:>2}",
                     pet.index,
+                    pet.name,
                     pet.rarity.as_str(),
                     pet.species.name,
                     if pet.shiny { " ✨" } else { "  " },
@@ -56,7 +57,6 @@ fn main() {
                     pet.iv.atk,
                     pet.iv.def,
                     pet.iv.spd,
-                    pet.species.id,
                 );
             }
         }
@@ -71,6 +71,7 @@ fn main() {
 
 fn print_pet(pet: &Pet) {
     println!("┌─ pet #{} ─────────────────────────────", pet.index);
+    println!("│ nome    : {}", pet.name);
     println!(
         "│ espécie : {}{}",
         pet.species.name,

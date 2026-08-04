@@ -73,6 +73,7 @@ pub struct Provenance {
 #[derive(Debug, Clone, Serialize)]
 pub struct Pet {
     pub index: u32,
+    pub name: String,
     pub rarity: Rarity,
     pub shiny: bool,
     pub species: Species,

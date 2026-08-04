@@ -52,9 +52,11 @@ pub fn hatch(github_id: u64, index: u32) -> Pet {
     let shiny = u64_of(&pet_seed, "shiny") % SHINY_DENOMINATOR as u64 == 0;
     let species = pick_species(rarity, u64_of(&pet_seed, "species"));
     let iv = IV::from_gene(&pet_seed, "iv");
+    let name = crate::name::pet_name(&pet_seed);
 
     Pet {
         index,
+        name,
         rarity,
         shiny,
         species,

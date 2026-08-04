@@ -62,3 +62,18 @@ fn distribution_approximates_weights() {
     let legendary = frac(Rarity::Legendary);
     assert!(legendary < 0.03, "legendary = {:.3}", legendary);
 }
+
+#[test]
+fn pet_name_is_deterministic() {
+    assert_eq!(hatch(42, 0).name, hatch(42, 0).name);
+}
+
+#[test]
+fn pet_names_are_unique_in_practice() {
+    use std::collections::HashSet;
+    let mut seen = HashSet::new();
+    for id in 0..1000u64 {
+        let pet = hatch(id, 0);
+        assert!(seen.insert(pet.name.clone()), "nome duplicado: {}", pet.name);
+    }
+}

@@ -8,9 +8,11 @@
 pub mod catalog;
 pub mod crypto;
 pub mod forge;
+pub mod name;
 pub mod pet;
 
 pub use catalog::{species_for_tier, RARITY_ORDER, RARITY_WEIGHTS, SHINY_DENOMINATOR};
 pub use crypto::{gene, hmac_sha256, root_seed, APP_SALT, GENESIS_VERSION};
+pub use name::pet_name;
 pub use forge::{anchor_for, hatch};
 pub use pet::{ForgeResult, IV, Pet, Provenance, Rarity, Species};
