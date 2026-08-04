@@ -374,3 +374,25 @@ visual, **nunca** a raridade/IV/stats.
   a skin. O `rainbow(frame)` **já existe** (reaproveitar).
 - Exemplos plausíveis: Iridescent (rainbow animado), Gold/Metallic, Neon/Glitch, sprites
   alternativos, skins temáticas.
+
+## Progressão: XP, nível e aura (em design — 2026-08-04)
+
+**Decisão fechada:** nível escala os stats (estilo Pokémon clássico) — o pet nasce fraco
+(nível 1, ~fração de `base + IV`) e fica forte até `base + IV` no nível máximo. (Opção A.)
+
+**Papéis distintos (sempre — não se confundem):**
+- **Aura** = moeda da **coleção** → **expandir** (eclosão / renascimento). Escopo global (conta).
+- **Nível / XP** = força de **um pet** → **fortalecer** (sobe stats). Escopo individual (por pet).
+
+Aura = "quero mais pets"; nível = "quero este pet mais forte".
+
+**Decisão em aberto — a FONTE do XP:**
+- **Opção 1 (recomendada p/ agora):** `gh api` → aura (matéria-prima única). Aura é gasta em:
+  - **eclosão** (novo pet / expandir) **OU treino** (investir aura num pet → XP → nível → +stats).
+  Trade-off rico: expandir vs fortalecer. Sem precisar de batalha ainda.
+- **Opção 2 — fontes separadas:** aura = `gh api` (coleção); nível = jogar (batalha / feed / idle).
+  Cada recurso independente, mas o nível depende de gameplay que ainda não existe.
+- **Híbrido:** aura = eclosão (`gh api`); nível = idle (XP passivo por tempo).
+
+A definir quando retomar: Opção 1 / 2 / híbrido; curva de nível (proposto máx 50); custo relativo
+de eclosão vs treino.
