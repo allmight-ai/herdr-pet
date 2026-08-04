@@ -19,13 +19,22 @@ imutável**. Anti-reroll **sem servidor**.
 IV), mas sem reroll. Em vez de "1 pet = sua identidade" (Visão A), sua **coleção reflete o seu
 trabalho** — e o mesmo esforço que alimenta o pet forja a aura que compra novas eclosões.
 
-## Reutiliza
+## Referência / base
 
-A teoria e parte do código do projeto **petterm** (`~/projects/petterm`) — V-Pet 1-bit LCD estilo
-Tamagotchi, onde a cor do LCD é a raridade.
+A **teoria e o design visual** vêm do projeto **petterm** (`~/projects/petterm`) — V-Pet 1-bit LCD
+estilo Tamagotchi, onde a cor do LCD é a raridade. O petterm é **Python**; este companion é
+**reimplementado em Rust** (sem import de código Python — só referência de design).
+
+## Stack
+
+- **Rust** — lógica de forja (HMAC-SHA256, sub-seeds, derivação por índice) + renderer LCD.
+- **Plugin nativo do Herdr** — manifest `herdr-plugin.toml` (`[[panes]]` / `[[actions]]` /
+  `[[link_handlers]]`) apontando para o binário Rust. O Herdr executa o binário e passa o contexto
+  por env vars (`HERDR_PLUGIN_STATE_DIR`, `HERDR_BIN_PATH`, …).
 
 ## Decisões de design fechadas (2026-08-04)
 
+- **Implementação: Rust**, plugin nativo do Herdr (manifest TOML + binário).
 - **Âncora** = ID numérico do GitHub (`gh api user --jq .id`) — imutável, fora da máquina.
 - **DNA por sub-seed** (`HMAC(seed, feature_name)`, estilo BIP-32) — reserva ilimitada de genes.
 - **`genesis_version`** + migration — o algoritmo é mutável; os nascimentos são imutáveis.

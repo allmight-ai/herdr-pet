@@ -151,16 +151,32 @@ histórico público real. A aura desbloqueia variantes (shiny "por mérito", mol
 evolução visual) **sem mexer no tier forjado**. O bicho amadurece com a carreira — e os mesmos
 eventos que enchem a barriga forjam a aura.
 
-## Mapeamento no Herdr
+## Mapeamento no Herdr (estrutura constatada 2026-08-04)
 
-- `[[panes]]` → casinha LCD (`lcd.py` reaproveitado, **cor do LCD = raridade**, 6 temas)
-- `[[startup]]` → gh-poll (feeding + aura) + genesis gist (uma vez)
-- `[[events]]` / `[[link_handlers]]` → petiscos
-- state em `HERDR_PLUGIN_STATE_DIR`, mas **raridade nunca vive só lá** — sempre re-derivável da âncora
+Plugin nativo do Herdr = **manifest `herdr-plugin.toml`** + **binário Rust**. O Herdr executa o
+`command` de cada entrada do manifest — a linguagem é livre (o plugin oficial `browser` usa
+`bun`/TypeScript; nós usamos Rust). Schema confirmado inspecionando o plugin oficial:
 
-> Eventos do Herdr: confirmar a lista exata que o `[[events]]` emite (só `worktree.created` está
-> confirmado pela doc; a página de plugins é JS e o WebFetch não pescou a referência). Plano B
-> garantido: polling do `gh api` independe do Herdr emitir eventos nativos.
+```toml
+id = "..."                # + name, version, min_herdr_version, description, platforms
+[[actions]]               # id, title, contexts, command   → comandos invocáveis
+[[panes]]                 # id, title, placement, command   → UI persistente ("casinha")
+[[link_handlers]]         # id, title, pattern (regex), action → reage a links
+```
+
+- **`[[panes]]` → a casinha LCD.** Renderiza o pet no **stdout do pane** (ANSI/1-bit). **Não** precisa
+  do graphics transport pesado que o plugin `browser` usa pra páginas web — LCD em ASCII basta.
+  Renderer LCD portado do petterm pra Rust; **cor = raridade**.
+- **`[[actions]]` → feed / play / sleep / status / reborn** (comandos do joguinho).
+- **`[[link_handlers]]` → petiscos** (reagir a links de PR/issue, etc.).
+- **`[[startup]]` / `[[events]]`: NÃO confirmados** no schema do plugin oficial (só vi actions / panes
+  / link_handlers). Se existirem no Herdr, ótimo; senão, **plan B = polling `gh api`** num loop do
+  pane/action, que independe de eventos nativos do Herdr.
+
+Env vars que o Herdr passa ao `command`: `HERDR_PLUGIN_ID`, `HERDR_PLUGIN_STATE_DIR`,
+`HERDR_PLUGIN_CONFIG_DIR`, `HERDR_PANE_ID`, `HERDR_SESSION`, `HERDR_BIN_PATH` (CLI `herdr`),
+`HERDR_CELL_WIDTH_PX` / `HERDR_CELL_HEIGHT_PX`. State persistente em `HERDR_PLUGIN_STATE_DIR` — mas a
+**raridade nunca vive só lá**, é sempre re-derivável da âncora.
 
 ## O limite honesto
 
