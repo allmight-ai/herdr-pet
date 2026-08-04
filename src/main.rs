@@ -73,7 +73,7 @@ fn main() {
                     "  #{:<3} {:<16} {:<10} {:<8}{} HP {:>3} SP {:>3}  IV {}/{}",
                     pet.index,
                     pet.name,
-                    pet.rarity.as_str(),
+                    pet.rarity.as_title(),
                     pet.species.name,
                     if pet.shiny { "✨" } else { " " },
                     pet.stats.hp_max,
@@ -210,7 +210,7 @@ fn print_pet(pet: &herdr_pet::Pet) {
         pet.species.name,
         if pet.shiny { "  ✦ shiny" } else { "" }
     );
-    println!("│ tier    : {}", pet.rarity.as_str());
+    println!("│ tier    : {}", pet.rarity.as_title());
     println!("│ HP/SP   : {} / {}", pet.stats.hp_max, pet.stats.sp_max);
     println!(
         "│ stats   : ATK {} · DEF {} · SpA {} · SpD {} · SPE {}",

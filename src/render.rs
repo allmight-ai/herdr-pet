@@ -48,6 +48,7 @@ pub fn bar(numer: u16, denom: u16, width: usize) -> String {
 }
 
 /// Largura de DISPLAY (colunas reais no terminal), ignorando escapes ANSI.
+/// Emojis (✨, …) renderizam em 2 colunas no terminal embora unicode-width conte 1.
 fn display_width(s: &str) -> usize {
     let mut w = 0usize;
     let mut chars = s.chars();
@@ -59,10 +60,18 @@ fn display_width(s: &str) -> usize {
                 }
             }
         } else {
-            w += UnicodeWidthChar::width(c).unwrap_or(0);
+            w += char_width(c);
         }
     }
     w
+}
+
+/// Largura de um char. Emojis contam 2 (como o terminal desenha); demais seguem unicode-width.
+fn char_width(c: char) -> usize {
+    if matches!(c, '✨' | '⭐' | '🌟' | '✅' | '⚡' | '🔥') {
+        return 2;
+    }
+    UnicodeWidthChar::width(c).unwrap_or(0)
 }
 
 fn row_left(o: &mut String, content: &str, w: usize) {
@@ -120,7 +129,7 @@ fn flair(status: AgentStatus, frame: u32) -> Option<&'static str> {
 /// Desenha a casinha LCD completa. `status` = estado do agente espelhado (drive
 /// o mood + o bounce do sprite); `frame` = animação idle + cor iridescente.
 pub fn render_casinha(pet: &Pet, frame: u32, status: AgentStatus) -> String {
-    const W: usize = 26;
+    const W: usize = 28;
     let color = ansi_color(pet.rarity, pet.shiny, frame);
     let sprite = sprite_for(pet.species.id);
     // Bounce por mood: working/done = animado; blocked/idle = parado; unknown = idle padrão.
@@ -136,12 +145,12 @@ pub fn render_casinha(pet: &Pet, frame: u32, status: AgentStatus) -> String {
 
     // nome colorido (cor do tier/shiny)
     row_left(&mut o, &format!("{}{}{}", color, pet.name, RESET), W);
-    // espécie · tier (+ "✦" se shiny). Marcador compacto: "(shiny)" estourava a
-    // largura em tiers longos (ex.: "Origin · primordial (shiny)" = 27 > 26).
-    let shiny_tag = if pet.shiny { " ✦" } else { "" };
+    // espécie · tier (+ ✨ se shiny). Emoji ✨ renderiza no terminal (gallery/lineage
+    // já o usam); display_width conta como 2 p/ manter o alinhamento.
+    let shiny_tag = if pet.shiny { " ✨" } else { "" };
     row_left(
         &mut o,
-        &format!("{} · {}{}", pet.species.name, pet.rarity.as_str(), shiny_tag),
+        &format!("{} · {}{}", pet.species.name, pet.rarity.as_title(), shiny_tag),
         W,
     );
     sep(&mut o, W);

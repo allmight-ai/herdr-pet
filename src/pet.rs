@@ -23,6 +23,18 @@ impl Rarity {
             Rarity::Primordial => "primordial",
         }
     }
+
+    /// Nome de exibição capitalizado (Common, …, Primordial). `as_str` é o id minúsculo.
+    pub fn as_title(&self) -> &'static str {
+        match self {
+            Rarity::Common => "Common",
+            Rarity::Uncommon => "Uncommon",
+            Rarity::Rare => "Rare",
+            Rarity::Epic => "Epic",
+            Rarity::Legendary => "Legendary",
+            Rarity::Primordial => "Primordial",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
