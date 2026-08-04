@@ -38,8 +38,15 @@ fn species_tier_matches_rolled_rarity() {
 fn iv_stats_within_range() {
     for id in 0..500u64 {
         let pet = hatch(id, 0);
-        for v in [pet.iv.hp, pet.iv.atk, pet.iv.def, pet.iv.spd] {
-            assert!(v <= 15, "iv stat fora do range 0..=15: {}", v);
+        for v in [
+            pet.iv.hp,
+            pet.iv.atk,
+            pet.iv.def,
+            pet.iv.sp_atk,
+            pet.iv.sp_def,
+            pet.iv.speed,
+        ] {
+            assert!(v <= 31, "iv stat fora do range 0..=31: {}", v);
         }
     }
 }

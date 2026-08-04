@@ -43,11 +43,11 @@ fn main() {
         }
         Cmd::Lineage { id, count } => {
             println!("Coleção forjada de github:{} (genesis v{})", id, GENESIS_VERSION);
-            println!("{:-<64}", "");
+            println!("{:-<72}", "");
             for i in 0..count {
                 let pet = hatch(id, i);
                 println!(
-                    "  #{:<3} {:<16} {:<10} {:<8}{} IV {:>2}/{:>2}/{:>2}/{:>2}",
+                    "  #{:<3} {:<16} {:<10} {:<8}{} IV {:>2}/{:>2}/{:>2}/{:>2}/{:>2}/{:>2}",
                     pet.index,
                     pet.name,
                     pet.rarity.as_str(),
@@ -56,7 +56,9 @@ fn main() {
                     pet.iv.hp,
                     pet.iv.atk,
                     pet.iv.def,
-                    pet.iv.spd,
+                    pet.iv.sp_atk,
+                    pet.iv.sp_def,
+                    pet.iv.speed,
                 );
             }
         }
@@ -79,11 +81,13 @@ fn print_pet(pet: &Pet) {
     );
     println!("│ tier    : {}", pet.rarity.as_str());
     println!(
-        "│ IV      : {}/{}/{}/{}  (hp/atk/def/spd, total {})",
+        "│ IV      : {}/{}/{}/{}/{}/{}  (hp/atk/def/spA/spD/spe, total {})",
         pet.iv.hp,
         pet.iv.atk,
         pet.iv.def,
-        pet.iv.spd,
+        pet.iv.sp_atk,
+        pet.iv.sp_def,
+        pet.iv.speed,
         pet.iv.total()
     );
     println!("│ âncora  : {}", pet.provenance.anchor);

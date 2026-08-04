@@ -30,29 +30,39 @@ pub struct Species {
     pub tier: Rarity,
 }
 
-/// Individual Values (genes de força). 4 stats, cada um 0–15 (estilo Pokémon).
+/// Individual Values (genes de força), padrão Pokémon: 6 stats de 0–31.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct IV {
     pub hp: u8,
     pub atk: u8,
     pub def: u8,
-    pub spd: u8,
+    pub sp_atk: u8,
+    pub sp_def: u8,
+    pub speed: u8,
 }
 
 impl IV {
-    /// Soma 0–60. Útil pra ranquear a "genética" do pet.
-    pub fn total(&self) -> u8 {
-        self.hp + self.atk + self.def + self.spd
+    /// Soma 0–186. Útil pra ranquear a "genética" do pet.
+    pub fn total(&self) -> u16 {
+        self.hp as u16
+            + self.atk as u16
+            + self.def as u16
+            + self.sp_atk as u16
+            + self.sp_def as u16
+            + self.speed as u16
     }
 
-    /// Deriva os 4 stats de um gene nomeado (4 nibbles = 2 bytes).
+    /// Deriva os 6 stats de um gene nomeado (`byte % 32` → 0–31, distribuição uniforme).
     pub fn from_gene(seed: &[u8], name: &str) -> Self {
         let g = crate::crypto::gene(seed, name);
+        let s = |i: usize| g[i] % 32;
         IV {
-            hp: g[0] & 0x0F,
-            atk: (g[0] >> 4) & 0x0F,
-            def: g[1] & 0x0F,
-            spd: (g[1] >> 4) & 0x0F,
+            hp: s(0),
+            atk: s(1),
+            def: s(2),
+            sp_atk: s(3),
+            sp_def: s(4),
+            speed: s(5),
         }
     }
 }
