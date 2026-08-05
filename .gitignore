@@ -1,29 +1,23 @@
-# Python (legado — referência petterm)
-__pycache__/
-*.py[cod]
-*.egg-info/
-.eggs/
-build/
-dist/
-
-# Rust (build output do plugin)
+# Rust
 /target
 
-# Ambientes virtuais
-.venv/
-venv/
-env/
-
-# Secrets / env
-.env
-.env.*
-
-# Estado de runtime do plugin (nunca no repo — raridade é sempre re-derivável da âncora)
+# State de runtime (local / Herdr)
+.herdr-pet-state/
 HERDR_PLUGIN_STATE_DIR/
 *.state
 *.lock
 
-# OS / editor
+# Env / secrets
+.env
+.env.*
+
+# Python (só se aparecer lixo local)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Editor / OS
 .DS_Store
 *.swp
 .idea/

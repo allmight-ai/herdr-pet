@@ -16,7 +16,7 @@ fn idempotent_same_anchor_and_index() {
 
 #[test]
 fn different_indices_yield_different_pets() {
-    // Base da coleção/renascimento: índices diferentes = pets diferentes.
+    // Índices diferentes → pets diferentes.
     let a = hatch(12345678, 0);
     let b = hatch(12345678, 1);
     assert_ne!(a.provenance.seed_hash, b.provenance.seed_hash);

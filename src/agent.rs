@@ -1,16 +1,12 @@
-//! Leitura do status do agente do Herdr — o "programador" que o pet acompanha.
+//! Lê o status do agente do Herdr para o pet reagir.
 //!
-//! O Herdr expõe o estado de cada agente via socket API (`herdr agent list`),
-//! com o enum: `working | done | blocked | idle | unknown`. O pane `watch`
-//! polla isso e reage (animação/mood). Detecção via Screen Manifest TOML
-//! (Claude Code: zero config, latência de poucos segundos).
-//!
-//! v1 (cosmético/stakeless): só animação. Sem progressão — isso é v2.
+//! O Herdr expõe o estado via socket API (`herdr agent list`):
+//! `working | done | blocked | idle | unknown`. O pane `watch` polla isso
+//! e anima o mood. Detecção via Screen Manifest (Claude Code sem config extra).
 
 use serde::Deserialize;
 
-/// Estado do agente espelhado pelo pet (enum real do Herdr 0.8.0,
-/// confirmado via `herdr agent wait --until`).
+/// Status do agente espelhado pelo pet (enum do Herdr).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentStatus {
     Working,

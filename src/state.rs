@@ -1,11 +1,8 @@
 //! State persistente do companion.
 //!
-//! Vive em `HERDR_PLUGIN_STATE_DIR` (runtime no Herdr) ou num fallback de dev.
-//! Guarda: a âncora com **lock-in** (GitHub ID da 1ª conta vista — daí pra frente
-//! não muda), o índice do pet ativo e os índices já chocados (a "coleção").
-//!
-//! Importante: a **raridade nunca vive só aqui** — é sempre re-derivável da
-//! âncora. O state é só bookkeeping (qual pet está ativo, quantos já nasceram).
+//! Em `HERDR_PLUGIN_STATE_DIR` (Herdr) ou `.herdr-pet-state/` (dev).
+//! Guarda a âncora (lock-in no primeiro GitHub ID), o índice ativo e os índices
+//! já chocados. A raridade não vive só no disco — é rederivável da âncora.
 
 use serde::{Deserialize, Serialize};
 use std::fs;

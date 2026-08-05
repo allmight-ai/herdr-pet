@@ -1,9 +1,8 @@
-//! herdr-pet — núcleo de forja.
+//! herdr-pet — núcleo de forja e espelho do agente.
 //!
-//! Raridade **forjada, não sorteada**: derivada deterministicamente do ID numérico
-//! do GitHub. Cada pet da coleção é forjado por `(âncora, índice)` via sub-seeds
-//! (princípio BIP-32). Apagar o state e re-rodar re-deriva o mesmo pet — não há
-//! reroll.
+//! Raridade forjada (não sorteada): derivada do ID numérico do GitHub.
+//! Cada pet é `HMAC(root_seed, "pet:N")` (sub-seeds estilo BIP-32).
+//! Apagar o state e re-rodar rederiva o mesmo pet.
 
 pub mod agent;
 pub mod anchor;

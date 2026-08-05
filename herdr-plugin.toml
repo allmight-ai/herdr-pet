@@ -1,36 +1,31 @@
-id = "fredericotmello.herdr-pet"
+id = "allmight-ai.herdr-pet"
 name = "Herdr Pet"
 version = "0.1.0"
 min_herdr_version = "0.7.4"
-description = "Companion V-Pet — espelha o seu agente de código (status + tarefa); raridade forjada pelo seu GitHub."
+description = "Companion V-Pet — espelha o status e a tarefa do seu agente de código."
 platforms = ["linux", "macos"]
 
-# Herdr compila o Rust no install (do GitHub). Gera ./target/release/herdr-pet.
 [[build]]
 command = ["cargo", "build", "--release"]
 
-# Ações (invocáveis por keybinding ou `herdr plugin action invoke`).
 [[actions]]
 id = "status"
 title = "Pet status"
 contexts = ["workspace"]
 command = ["./target/release/herdr-pet", "status"]
 
-# Abre/fecha o pet (split pequeno dockado) — pro hotkey prefix+a.
 [[actions]]
 id = "open"
 title = "Pet: toggle (abre/fecha)"
 contexts = ["workspace"]
 command = ["./target/release/herdr-pet", "open"]
 
-# Hotkey que ships com o plugin: prefix+a abre/fecha o pet.
 [[keys.command]]
 key = "prefix+a"
 type = "plugin_action"
-command = "fredericotmello.herdr-pet.open"
-description = "Pet: toggle (split pequeno sob demanda)"
+command = "allmight-ai.herdr-pet.open"
+description = "Pet: toggle (abre/fecha)"
 
-# Casinha LCD ao vivo (stdout/ANSI — sem protocolo gráfico).
 [[panes]]
 id = "lcd"
 title = "Pet"

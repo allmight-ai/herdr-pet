@@ -1,12 +1,10 @@
-//! A forja: deriva deterministicamente a identidade de um pet a partir da âncora
-//! (ID GitHub) e do índice (0 = nascimento; 1+ = renascimentos / novos pets da
-//! coleção).
+//! Forja determinística: identidade do pet a partir da âncora (ID GitHub) e do índice.
 
 use crate::catalog::{base_stats_for_tier, species_for_tier, RARITY_WEIGHTS, SHINY_DENOMINATOR};
 use crate::crypto::{gene, root_seed, GENESIS_VERSION};
 use crate::pet::{CombatStats, IV, Pet, Provenance, Rarity, Species};
 
-/// GitHub ID do criador (Frederico) — alvo do easter egg do tier Primordial.
+/// GitHub ID do autor — easter egg do tier Primordial no pet #0.
 pub const FREDERICO_ID: u64 = 76918723;
 
 /// Forma canônica da âncora: `"github:<id>"`.

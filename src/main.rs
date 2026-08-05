@@ -21,7 +21,7 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Mostra os primeiros N pets da coleção (linha do tempo de renascimentos). [dev]
+    /// Mostra os primeiros N pets forjados a partir de um github id. [dev]
     Lineage {
         #[arg(long)]
         id: u64,
@@ -51,7 +51,7 @@ fn main() {
         Cmd::Init => match herdr_pet::anchor::ensure_locked_state() {
             Ok(s) => {
                 println!("✓ Companion inicializado — âncora travada em {}", s.anchor);
-                println!("  Coleção: {} pet(s) chocada(s).", s.hatched.len());
+                println!("  Pets chocados: {}.", s.hatched.len());
                 print_pet(&hatch(s.github_id, s.active_index));
             }
             Err(e) => {
@@ -68,7 +68,7 @@ fn main() {
             }
         }
         Cmd::Lineage { id, count } => {
-            println!("Coleção forjada de github:{} (genesis v{})", id, GENESIS_VERSION);
+            println!("Pets forjados de github:{} (genesis v{})", id, GENESIS_VERSION);
             println!("{:-<80}", "");
             for i in 0..count {
                 let pet = hatch(id, i);
@@ -335,7 +335,7 @@ fn pet_pane_in_workspace() -> Result<Option<String>, String> {
 /// senão abre como split pequeno dockado (~16 linhas) e refoca o pane original.
 /// Leve — o `watch` só roda enquanto aberto.
 fn open_pet_small() -> Result<(), String> {
-    const PLUGIN_ID: &str = "fredericotmello.herdr-pet";
+    const PLUGIN_ID: &str = "allmight-ai.herdr-pet";
     let bin = herdr_bin();
 
     // Toggle: pet já existe neste workspace → fecha.
