@@ -20,7 +20,17 @@ LCD 1-bit. Leve, sob demanda, em qualquer workspace.
   aberto).
 - **Em qualquer workspace**: hotkey global abre/fecha (toggle).
 
-## Como usar
+## Instalar
+```bash
+herdr plugin link .          # dev local (rode do diretório do plugin)
+# ou, de um repo no GitHub (compila o Rust no install):
+herdr plugin install <user>/herdr-pet
+```
+O hotkey **`prefix+a`** (Ctrl+b, solta, `a`) abre/fecha o pet e **vem no manifest** do plugin.
+Se não disparar numa instalação nova, reinicie o Herdr (keybindings carregam no startup).
+Também dá pra invocar direto: `herdr plugin action invoke open --plugin fredericotmello.herdr-pet`.
+
+## Como usar (direto, sem instalar como plugin)
 ```bash
 cargo build --release
 ```

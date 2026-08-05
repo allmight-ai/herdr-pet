@@ -2,21 +2,35 @@ id = "fredericotmello.herdr-pet"
 name = "Herdr Pet"
 version = "0.1.0"
 min_herdr_version = "0.7.4"
-description = "Companion V-Pet — coleção forjada por mérito (raridade derivada do seu GitHub)."
+description = "Companion V-Pet — espelha o seu agente de código (status + tarefa); raridade forjada pelo seu GitHub."
 platforms = ["linux", "macos"]
 
-# Herdr compila o Rust no install (a partir do GitHub). Gera ./target/release/herdr-pet.
+# Herdr compila o Rust no install (do GitHub). Gera ./target/release/herdr-pet.
 [[build]]
 command = ["cargo", "build", "--release"]
 
-# Ação de demonstração (Fase 1). Comandos de gameplay (feed/play/sleep/reborn) entram depois.
+# Ações (invocáveis por keybinding ou `herdr plugin action invoke`).
 [[actions]]
 id = "status"
 title = "Pet status"
 contexts = ["workspace"]
 command = ["./target/release/herdr-pet", "status"]
 
-# Casinha LCD ao vivo (stdout/ANSI — sem protocolo gráfico, conforme a doc do Herdr).
+# Abre/fecha o pet (split pequeno dockado) — pro hotkey prefix+a.
+[[actions]]
+id = "open"
+title = "Pet: toggle (abre/fecha)"
+contexts = ["workspace"]
+command = ["./target/release/herdr-pet", "open"]
+
+# Hotkey que ships com o plugin: prefix+a abre/fecha o pet.
+[[keys.command]]
+key = "prefix+a"
+type = "plugin_action"
+command = "fredericotmello.herdr-pet.open"
+description = "Pet: toggle (split pequeno sob demanda)"
+
+# Casinha LCD ao vivo (stdout/ANSI — sem protocolo gráfico).
 [[panes]]
 id = "lcd"
 title = "Pet"
