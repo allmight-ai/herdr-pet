@@ -279,6 +279,21 @@ fn herdr_bin() -> String {
     "herdr".to_string()
 }
 
+/// O pane atualmente focado (via `herdr pane current`). Mais robusto que a env var.
+fn focused_pane() -> Result<String, String> {
+    let bin = herdr_bin();
+    let out = std::process::Command::new(&bin)
+        .args(["pane", "current"])
+        .output()
+        .map_err(|e| format!("herdr pane current: {e}"))?;
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .map_err(|_| format!("pane current inesperado: {}", String::from_utf8_lossy(&out.stdout)))?;
+    v["result"]["pane"]["pane_id"]
+        .as_str()
+        .map(String::from)
+        .ok_or("não veio o pane_id atual".to_string())
+}
+
 /// Acha o pane do pet (label "Pet") no workspace atual, se existir.
 fn pet_pane_in_workspace() -> Result<Option<String>, String> {
     let bin = herdr_bin();
@@ -316,8 +331,8 @@ fn open_pet_small() -> Result<(), String> {
         return Ok(());
     }
 
-    let target = std::env::var("HERDR_PANE_ID")
-        .map_err(|_| "HERDR_PANE_ID ausente — rode dentro de um painel do Herdr.".to_string())?;
+    // pane alvo = o focado (via API — mais robusto que a env var HERDR_PANE_ID)
+    let target = focused_pane()?;
 
     // 1) abre o pet dockado abaixo do pane atual (split)
     let out = std::process::Command::new(&bin)
