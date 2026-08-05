@@ -30,9 +30,15 @@ Companion V-Pet para o [Herdr](https://herdr.dev). Espelha o status do seu agent
 
 ## Instalar
 
+**Requisitos:** [Herdr](https://herdr.dev) ≥ 0.7.4 e [Rust](https://rustup.rs) (`cargo` no `PATH`). Linux e macOS.
+
 ```bash
-herdr plugin link .                         # desenvolvimento local
-herdr plugin install allmight-ai/herdr-pet  # do GitHub
+# Do GitHub (roda `cargo build --release` no install)
+herdr plugin install allmight-ai/herdr-pet
+
+# Desenvolvimento local (build à mão — o link não compila)
+cargo build --release
+herdr plugin link .
 ```
 
 | Ação | Atalho |
@@ -41,6 +47,8 @@ herdr plugin install allmight-ai/herdr-pet  # do GitHub
 | Redimensionar | `prefix+r` |
 
 Se o atalho não responder depois de instalar, reinicie o Herdr.
+
+No marketplace do Herdr: repositórios com a topic GitHub [`herdr-plugin`](https://github.com/topics/herdr-plugin).
 
 ## Uso
 
@@ -99,9 +107,15 @@ A V-Pet companion for [Herdr](https://herdr.dev). It mirrors your coding agent's
 
 ### Install
 
+**Requirements:** [Herdr](https://herdr.dev) ≥ 0.7.4 and [Rust](https://rustup.rs) (`cargo` on `PATH`). Linux and macOS.
+
 ```bash
-herdr plugin link .                         # local development
-herdr plugin install allmight-ai/herdr-pet  # from GitHub
+# From GitHub (runs `cargo build --release` during install)
+herdr plugin install allmight-ai/herdr-pet
+
+# Local development (build yourself — link does not compile)
+cargo build --release
+herdr plugin link .
 ```
 
 | Action | Shortcut |
@@ -110,6 +124,8 @@ herdr plugin install allmight-ai/herdr-pet  # from GitHub
 | Resize | `prefix+r` |
 
 Restart Herdr if the hotkey does not fire after install.
+
+Listed on the Herdr marketplace via the GitHub topic [`herdr-plugin`](https://github.com/topics/herdr-plugin).
 
 ### Usage
 
