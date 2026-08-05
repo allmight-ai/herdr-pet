@@ -1,104 +1,144 @@
 # 🐾 herdr-pet
 
-> 🇧🇷 Um companion V-Pet para o [**Herdr**](https://herdr.dev) que **espelha o seu agente de código**:
-> reage ao status dele (trabalhando / idle / blocked / done) e mostra a tarefa atual, numa
-> casinha LCD 1-bit. Leve, sob demanda, em qualquer workspace.
->
-> 🇺🇸 A companion V-Pet for [**Herdr**](https://herdr.dev) that **mirrors your coding agent**:
-> reacts to its status (working / idle / blocked / done) and shows the current task, in a 1-bit
-> LCD house. Lightweight, on-demand, in any workspace.
+Companion V-Pet para o [Herdr](https://herdr.dev) que espelha o seu agente de código: reage ao
+status dele (trabalhando / idle / blocked / done) e mostra a tarefa atual, numa casinha LCD 1-bit.
+Leve, sob demanda, em qualquer workspace. A raridade do pet é forjada a partir do seu ID do GitHub.
 
-**Status:** v1 (companion reativo) implementado. A ambição maior — coleção forjada por mérito
-(Visão B) — é futuro; veja [`docs/`](docs/).
+> v1 implementado. A coleção forjada por mérito (Visão B) é futuro — ver [`docs/`](docs/).
+> [English](#english)
 
 ---
 
-## Demo
+## Demonstração
 
 ```
 ┌──────────────────────────────┐
-│ Borixus·9d9b05ea             │   ← nome + identidade forjada (cor = raridade)
-│ Origin · Primordial ✨       │   ← espécie · raridade (✨ shiny)
-│ » Fazer isso no 2            │   ← tarefa ATUAL do agente
+│ Borixus·9d9b05ea             │
+│ Origin · Primordial ✨       │
+│ » Fazer isso no 2            │
 ├──────────────────────────────┤
 │             ▀▄▄▀             │
-│            ▟▀██▀▙            │   ← sprite 1-bit
+│            ▟▀██▀▙            │
 │            ▜▄██▄▛            │
 │             ▄▀▀▄             │
-│        « treinando »         │   ← mood que REAGE ao status do agente
+│        « treinando »         │
 └──────────────────────────────┘
 ```
 
-## Funcionalidades · Features
+## Funcionalidades
 
-- 🪞 **Espelha o agente / Mirrors the agent** — lê o `agent_status` do Herdr e reage com mood
-  (*treinando*, *dormindo*, *curioso*, *comemorando*).
-- 📋 **Tarefa atual / Current task** — mostra o que o agente está fazendo (`» <título>`).
-- 🔐 **Identidade forjada / Forged identity** — espécie + raridade (cor) + shiny derivados do seu
-  **ID numérico do GitHub** — **anti-reroll** (re-derivável; a raridade nunca vive só no disco).
-- ⚡ **Leve / Lightweight** — pet cacheado, redraw só quando algo muda, e **sob demanda** (só roda
-  enquanto o pane está aberto).
-- 🌍 **Global** — `prefix+a` abre/fecha em qualquer workspace.
+- **Espelha o agente** — lê o `agent_status` do Herdr e reage: treinando, dormindo, curioso, comemorando.
+- **Tarefa atual** — mostra o que o agente está fazendo.
+- **Identidade forjada** — espécie, raridade e shiny derivados do seu ID do GitHub. Anti-reroll: apagar o state e re-rodar nasce o mesmo pet.
+- **Leve** — pet cacheado, só redesenha quando algo muda, e roda apenas enquanto o pane está aberto.
+- **Global** — `prefix+a` abre e fecha o pet em qualquer workspace.
 
-## Instalar · Install
+## Instalar
 
 ```bash
-herdr plugin link .                       # dev local / local dev (rode do diretório do plugin)
-# ou / or — de um repo no GitHub / from a GitHub repo:
-herdr plugin install FredericoTMello/herdr-pet
+herdr plugin link .                              # desenvolvimento local
+herdr plugin install FredericoTMello/herdr-pet   # do GitHub
 ```
 
-| Ação · Action            | Atalho · Shortcut                 |
-| ---                      | ---                               |
-| Abrir/fechar o pet       | `prefix+a`  (Ctrl+b, solta, `a`)  |
-| Redimensionar · Resize   | `prefix+r`  (modo resize)         |
+| Ação | Atalho |
+| --- | --- |
+| Abrir / fechar o pet | `prefix+a` (Ctrl+b, solta, `a`) |
+| Redimensionar | `prefix+r` |
 
-> Se o atalho não disparar numa instalação nova, reinicie o Herdr (keybindings carregam no
-> startup). / If the hotkey doesn't fire on a fresh install, restart Herdr.
+Se o atalho não disparar depois de instalar, reinicie o Herdr.
 
-## Uso · Usage
+## Uso
 
 ```bash
-herdr-pet watch               # ao vivo — espelha o agente / live — mirrors the agent
-herdr-pet watch --mood done   # pré-visualiza um mood / preview a mood (dev)
-herdr-pet open                # toggle do pane (o que o hotkey chama) / toggles the pane
-herdr-pet status              # dados do pet / shows pet data
-herdr-pet gallery             # um pet de cada tier / one pet per tier (+ shiny + Primordial)
+herdr-pet watch               # casinha ao vivo (espelha o agente)
+herdr-pet watch --mood done   # pré-visualiza um mood
+herdr-pet open                # abre/fecha o pane (o que o atalho chama)
+herdr-pet status              # dados do pet
+herdr-pet gallery             # um pet de cada tier
 ```
 
-## Como funciona · How it works
+## Como funciona
 
-- **Forja · Forge**: `root_seed = HMAC(APP_SALT, github_id)` → `pet_seed = HMAC(root_seed, "pet:N")`
-  (derivação por sub-seeds, estilo BIP-32). Mesmo `(github_id, índice)` = **mesmo pet, sempre**
-  (idempotente — apagar o state e re-rodar nasce o mesmo pet).
-- **Espelho · Mirror**: o pane `watch` lê o agente via **socket API do Herdr** (`herdr agent list`)
-  e reage ao `agent_status`. Detecção por Screen Manifest (Claude Code: zero-config, latência de
-  poucos segundos).
+- **Forja** — `root_seed = HMAC(APP_SALT, github_id)`; cada pet por `HMAC(root_seed, "pet:N")` (derivação por sub-seeds, estilo BIP-32). O mesmo `(github_id, índice)` gera sempre o mesmo pet.
+- **Espelho** — o pane `watch` lê o agente pela socket API do Herdr (`herdr agent list`) e reage ao `agent_status`.
 
 ## Stack
 
-- **Rust** — forja (HMAC-SHA256) + renderer LCD (stdout/ANSI, block chars 1-bit).
-- **Plugin nativo do Herdr** — manifest `herdr-plugin.toml`; lê o agente via socket API.
+- **Rust** — forja (HMAC-SHA256) + renderer LCD (stdout/ANSI).
+- **Plugin nativo do Herdr** — `herdr-plugin.toml`.
 
 ## Roadmap
 
-- **v1** ✅ companion reativo (status + tarefa do agente), leve, global.
-- **v2 (futuro)** progressão (XP / nível / rebirth estilo Ragnarok) + combate — vai exigir
-  anti-cheat (provável: **servidor / open core**).
-- **Visão B (futuro aspiracional)** coleção forjada por mérito, gacha / breeding, aura via `gh api`
-  — [`docs/ESBOCO-herdr-raridade.md`](docs/ESBOCO-herdr-raridade.md).
+- **v1** ✅ companion reativo (status + tarefa do agente).
+- **v2** — progressão (XP, nível, rebirth) e combate.
+- **Visão B** — coleção forjada por mérito, gacha, breeding ([`docs/`](docs/)).
 
-## Licença · License
+## Licença
 
-**AGPL-3.0-or-later** — veja [`LICENSE`](LICENSE).
+AGPL-3.0-or-later. Veja [`LICENSE`](LICENSE).
 
-🇧🇷 Cliente open source com copyleft forte: derivados **devem permanecer open** (impede fork
-fechado). Monetização planejada via **servidor** futuro (open core: cliente open, servidor
-proprietário).
-🇺🇸 Strong-copyleft open-source client: derivatives **must stay open** (prevents closed forks).
-Monetization planned via a future **server** (open core).
+---
 
-## Créditos · Acknowledgments
+## English
 
-Teoria visual e design vêm do **petterm** (V-Pet LCD 1-bit estilo Tamagotchi) — reimplementado em
-Rust (referência de design, sem importar código).
+A companion V-Pet for [Herdr](https://herdr.dev) that mirrors your coding agent: it reacts to the
+agent's status (working / idle / blocked / done) and shows the current task, in a 1-bit LCD house.
+Lightweight, on-demand, in any workspace. The pet's rarity is forged from your GitHub ID.
+
+> v1 implemented. The forged-collection vision (Visão B) is future — see [`docs/`](docs/).
+
+### Features
+
+- **Mirrors the agent** — reads Herdr's `agent_status` and reacts: training, sleeping, curious, celebrating.
+- **Current task** — shows what the agent is doing.
+- **Forged identity** — species, rarity, and shiny derived from your GitHub ID. Anti-reroll: wipe the state and re-run yields the same pet.
+- **Lightweight** — cached, redraws only on change, runs only while the pane is open.
+- **Global** — `prefix+a` toggles the pet in any workspace.
+
+### Install
+
+```bash
+herdr plugin link .                              # local dev
+herdr plugin install FredericoTMello/herdr-pet   # from GitHub
+```
+
+| Action | Shortcut |
+| --- | --- |
+| Toggle the pet | `prefix+a` (Ctrl+b, release, `a`) |
+| Resize | `prefix+r` |
+
+If the hotkey doesn't fire after installing, restart Herdr.
+
+### Usage
+
+```bash
+herdr-pet watch               # live house (mirrors the agent)
+herdr-pet watch --mood done   # preview a mood
+herdr-pet open                # toggles the pane (what the hotkey calls)
+herdr-pet status              # pet data
+herdr-pet gallery             # one pet per tier
+```
+
+### How it works
+
+- **Forge** — `root_seed = HMAC(APP_SALT, github_id)`; each pet via `HMAC(root_seed, "pet:N")` (BIP-32-style sub-seed derivation). The same `(github_id, index)` always yields the same pet.
+- **Mirror** — the `watch` pane reads the agent via Herdr's socket API (`herdr agent list`) and reacts to `agent_status`.
+
+### Stack
+
+- **Rust** — forge (HMAC-SHA256) + LCD renderer (stdout/ANSI).
+- **Native Herdr plugin** — `herdr-plugin.toml`.
+
+### Roadmap
+
+- **v1** ✅ reactive companion (agent status + task).
+- **v2** — progression (XP, level, rebirth) and combat.
+- **Visão B** — forged collection, gacha, breeding ([`docs/`](docs/)).
+
+### License
+
+AGPL-3.0-or-later. See [`LICENSE`](LICENSE).
+
+---
+
+Design inspirado no **petterm** (V-Pet LCD 1-bit estilo Tamagotchi).
