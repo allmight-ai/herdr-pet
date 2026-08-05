@@ -3,7 +3,7 @@ name = "herdr-pet"
 version = "0.1.0"
 edition = "2021"
 description = "Companion V-Pet do Herdr — coleção forjada por mérito"
-license = "MIT"
+license = "AGPL-3.0-or-later"
 
 [[bin]]
 name = "herdr-pet"
