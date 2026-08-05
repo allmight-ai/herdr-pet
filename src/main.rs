@@ -225,12 +225,12 @@ fn main() {
                 herdr_pet::render::render_casinha(&primordial, 0, herdr_pet::AgentStatus::Idle, None)
             );
         }
-        Cmd::Status => {
-            println!("herdr-pet — companion V-Pet do Herdr");
-            println!("genesis_version : {}", GENESIS_VERSION);
-            println!("raridade        : forjada por âncora GitHub (não sorteada)");
-            println!("subcomandos     : init | hatch | lineage | watch | gallery | status");
-        }
+        Cmd::Status => match herdr_pet::state::load() {
+            Some(s) => print_pet(&hatch(s.github_id, s.active_index)),
+            None => println!(
+                "herdr-pet — sem state ainda. Rode `herdr-pet init` ou abra o pane `watch` (auto-init)."
+            ),
+        },
     }
 }
 
@@ -294,6 +294,22 @@ fn focused_pane() -> Result<String, String> {
         .ok_or("não veio o pane_id atual".to_string())
 }
 
+/// Faz um resize do pane `pet` e devolve a altura resultante do pet (lê do layout da resposta).
+fn resize_pet_height(bin: &str, pet: &str, dir: &str, amount: f64) -> Option<u64> {
+    let r = std::process::Command::new(bin)
+        .args([
+            "pane", "resize", "--pane", pet, "--direction", dir, "--amount", &amount.to_string(),
+        ])
+        .output()
+        .ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&r.stdout).unwrap_or_default();
+    v["result"]["resize"]["layout"]["panes"]
+        .as_array()?
+        .iter()
+        .find(|p| p["pane_id"].as_str() == Some(pet))
+        .and_then(|p| p["rect"]["height"].as_u64())
+}
+
 /// Acha o pane do pet (label "Pet") no workspace atual, se existir.
 fn pet_pane_in_workspace() -> Result<Option<String>, String> {
     let bin = herdr_bin();
@@ -349,19 +365,18 @@ fn open_pet_small() -> Result<(), String> {
         .ok_or("não veio o pane_id do pet")?
         .to_string();
 
-    // 2) encolhe até ~16 linhas (resize down em passos pequenos)
+    // 2) ajeita o tamanho na banda [16,18]: encolhe se >18, cresce se <16.
+    //    Abaixo de 16 o topo (nome) rola fora da viewport pequena.
+    for _ in 0..20 {
+        match resize_pet_height(&bin, &pet, "down", 0.02) {
+            Some(h) if h > 18 => {}
+            _ => break,
+        }
+    }
     for _ in 0..12 {
-        let r = std::process::Command::new(&bin)
-            .args(["pane", "resize", "--pane", &pet, "--direction", "down", "--amount", "0.02"])
-            .output()
-            .map_err(|e| format!("herdr resize: {e}"))?;
-        let rv: serde_json::Value = serde_json::from_slice(&r.stdout).unwrap_or_default();
-        let h = rv["result"]["resize"]["layout"]["panes"]
-            .as_array()
-            .and_then(|a| a.iter().find(|p| p["pane_id"].as_str() == Some(&pet)))
-            .and_then(|p| p["rect"]["height"].as_u64());
-        if matches!(h, Some(h) if h <= 17) {
-            break;
+        match resize_pet_height(&bin, &pet, "up", 0.02) {
+            Some(h) if h < 16 => {}
+            _ => break,
         }
     }
 
@@ -370,6 +385,6 @@ fn open_pet_small() -> Result<(), String> {
         .args(["pane", "focus", "--pane", &pet, "--direction", "up"])
         .output();
 
-    println!("✓ pet aberto ({pet}) — dockado embaixo, ~16 linhas. Ctrl+C no pane do pet fecha.");
+    println!("✓ pet aberto ({pet}) — dockado embaixo. Ctrl+C fecha · redimensionar: prefix+r");
     Ok(())
 }
