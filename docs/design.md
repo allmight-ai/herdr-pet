@@ -36,7 +36,15 @@ Também exibe `terminal_title`. Detecção via Screen Manifest do Herdr; o agent
 
 ## Deployment
 
-Não há pane global no Herdr. O pet abre sob demanda: `prefix+a` chama a action `open`, que faz toggle de um split pequeno com o entrypoint `lcd` (`watch`). O processo só existe enquanto o pane está aberto.
+Não há pane global no Herdr. O pet abre sob demanda: a action `open` faz toggle de um split pequeno com o entrypoint `lcd` (`watch`). O processo só existe enquanto o pane está aberto.
+
+O Herdr **não** carrega `[[keys.command]]` do manifesto do plugin — só do `config.toml` do usuário. Também não coloca o binário no PATH. Por isso o install precisa ser zero-config:
+
+1. `[[build]]` → `scripts/build.sh` → `cargo build --release` + `herdr-pet setup`
+2. `setup` grava um bloco managed no `~/.config/herdr/config.toml` (atalho `prefix+a`, com fallback) e um shim em `~/.local/bin/herdr-pet`
+3. `[[startup]]` re-roda `setup --quiet` a cada subida do server (path do plugin muda no update)
+
+Atalho padrão: `prefix+a` → action `allmight-ai.herdr-pet.open`.
 
 ## Stack e contratos
 

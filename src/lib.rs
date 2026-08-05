@@ -12,6 +12,7 @@ pub mod forge;
 pub mod name;
 pub mod pet;
 pub mod render;
+pub mod setup;
 pub mod sprites;
 pub mod state;
 

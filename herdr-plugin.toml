@@ -5,8 +5,13 @@ min_herdr_version = "0.7.4"
 description = "Companion V-Pet — espelha o status e a tarefa do seu agente de código."
 platforms = ["linux", "macos"]
 
+# Install: compila + grava atalho/PATH automaticamente (herdr-pet setup).
 [[build]]
-command = ["cargo", "build", "--release"]
+command = ["sh", "scripts/build.sh"]
+
+# Toda subida do server: re-garante atalho/shim (ex.: path mudou no update do plugin).
+[[startup]]
+command = ["./target/release/herdr-pet", "setup", "--quiet"]
 
 [[actions]]
 id = "status"
@@ -20,11 +25,11 @@ title = "Pet: toggle (abre/fecha)"
 contexts = ["workspace"]
 command = ["./target/release/herdr-pet", "open"]
 
-[[keys.command]]
-key = "prefix+a"
-type = "plugin_action"
-command = "allmight-ai.herdr-pet.open"
-description = "Pet: toggle (abre/fecha)"
+[[actions]]
+id = "setup"
+title = "Pet: reaplicar atalho e PATH"
+contexts = ["workspace"]
+command = ["./target/release/herdr-pet", "setup"]
 
 [[panes]]
 id = "lcd"

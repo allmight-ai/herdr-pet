@@ -43,6 +43,13 @@ enum Cmd {
     Gallery,
     /// Estado do companion.
     Status,
+    /// Pós-install: grava atalho no config do Herdr + shim no PATH (idempotente).
+    /// Rodado automaticamente no `[[build]]` e no `[[startup]]` do plugin.
+    Setup {
+        /// Saída silenciosa (startup do Herdr).
+        #[arg(long)]
+        quiet: bool,
+    },
 }
 
 fn main() {
@@ -163,6 +170,26 @@ fn main() {
             print!("\x1b[?1049l"); // restaura o buffer principal
             let _ = std::io::stdout().flush();
         }
+        Cmd::Setup { quiet } => match herdr_pet::setup::ensure_setup() {
+            Ok(report) => {
+                if !quiet {
+                    herdr_pet::setup::print_report(&report);
+                }
+                // Exit 0 even on soft failures (config missing etc.) so plugin startup
+                // never blocks the Herdr server. Hard I/O errors still fail below.
+                if matches!(
+                    report.keybind,
+                    herdr_pet::setup::KeybindStatus::Error
+                ) || matches!(report.shim, herdr_pet::setup::ShimStatus::Error)
+                {
+                    std::process::exit(1);
+                }
+            }
+            Err(e) => {
+                eprintln!("erro no setup: {e}");
+                std::process::exit(1);
+            }
+        },
         Cmd::Open => match open_pet_small() {
             Ok(()) => {}
             Err(e) => {
@@ -310,10 +337,12 @@ fn resize_pet_height(bin: &str, pet: &str, dir: &str, amount: f64) -> Option<u64
         .and_then(|p| p["rect"]["height"].as_u64())
 }
 
-/// Acha o pane do pet (label "Pet") no workspace atual, se existir.
+/// Acha o pane do pet (label "Pet") no workspace do pane focado, se existir.
 fn pet_pane_in_workspace() -> Result<Option<String>, String> {
     let bin = herdr_bin();
-    let ws = std::env::var("HERDR_WORKSPACE_ID").ok();
+    // Prefer API focus (hotkey/action context) over HERDR_WORKSPACE_ID — the env
+    // can lag when `herdr-pet open` is called from another pane/workspace.
+    let ws = focused_workspace_id().or_else(|| std::env::var("HERDR_WORKSPACE_ID").ok());
     let out = std::process::Command::new(&bin)
         .args(["pane", "list"])
         .output()
@@ -325,10 +354,25 @@ fn pet_pane_in_workspace() -> Result<Option<String>, String> {
             a.iter()
                 .find(|p| {
                     p.get("label").and_then(|l| l.as_str()) == Some("Pet")
-                        && p.get("workspace_id").and_then(|w| w.as_str()) == ws.as_deref()
+                        && match ws.as_deref() {
+                            Some(ws) => p.get("workspace_id").and_then(|w| w.as_str()) == Some(ws),
+                            None => true,
+                        }
                 })
                 .and_then(|p| p["pane_id"].as_str().map(String::from))
         }))
+}
+
+fn focused_workspace_id() -> Option<String> {
+    let bin = herdr_bin();
+    let out = std::process::Command::new(&bin)
+        .args(["pane", "current"])
+        .output()
+        .ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    v["result"]["pane"]["workspace_id"]
+        .as_str()
+        .map(String::from)
 }
 
 /// **Toggle** do pet (pro hotkey): se já existe um pane do pet neste workspace, fecha;

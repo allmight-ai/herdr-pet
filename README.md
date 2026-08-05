@@ -26,6 +26,7 @@ A espécie, a raridade, o nome e os stats vêm do seu ID do GitHub. Apagar o sta
 - Mostra a tarefa atual do agente (`terminal_title`)
 - Forja espécie, raridade, shiny, nome e stats a partir do GitHub
 - Abre e fecha sob demanda com `prefix+a` em qualquer workspace
+- Atalho e CLI no PATH configurados **automaticamente** no install
 - Só consome recurso enquanto o painel está aberto
 
 ## Instalação
@@ -33,33 +34,64 @@ A espécie, a raridade, o nome e os stats vêm do seu ID do GitHub. Apagar o sta
 **Requisitos:** [Herdr](https://herdr.dev) ≥ 0.7.4, [Rust](https://rustup.rs) (`cargo` no `PATH`). Linux e macOS.
 
 ```bash
-# Pelo GitHub (o install compila com cargo)
 herdr plugin install allmight-ai/herdr-pet
-
-# Desenvolvimento local (o link não compila sozinho)
-cargo build --release
-herdr plugin link .
 ```
 
-| Ação | Atalho |
-| --- | --- |
-| Abrir / fechar o pet | `prefix+a` (Ctrl+b, soltar, depois `a`) |
-| Redimensionar | `prefix+r` |
+Pronto. O install:
 
-Se o atalho não funcionar depois da instalação, reinicie o Herdr.
+1. Compila o binário (`cargo build --release`)
+2. Grava o atalho no seu `~/.config/herdr/config.toml` (bloco managed)
+3. Instala `herdr-pet` em `~/.local/bin` (shim)
+4. Recarrega a config do Herdr se o server estiver rodando
+
+**Não precisa editar config à mão.**
+
+| Ação | Como |
+| --- | --- |
+| Abrir / fechar o pet | `prefix+a` → **Ctrl+b**, soltar, depois **`a`** |
+| Redimensionar | `prefix+r` |
+| Status no shell | `herdr-pet status` |
+
+Se o atalho não responder depois do install, reinicie o Herdr (ou rode `herdr-pet setup`).
+
+### Desenvolvimento local
+
+```bash
+cargo build --release
+herdr plugin link .
+# ou só o pós-install:
+./target/release/herdr-pet setup
+```
 
 ## Uso
 
 ```bash
-herdr-pet watch               # casinha ao vivo
+herdr-pet setup               # reaplicar atalho + PATH (idempotente)
+herdr-pet open                # abre ou fecha o painel (precisa do Herdr rodando)
+herdr-pet watch               # casinha ao vivo no terminal atual
 herdr-pet watch --mood done   # pré-visualiza um humor
-herdr-pet open                # abre ou fecha o painel (atalho)
 herdr-pet status              # dados do pet
 herdr-pet gallery             # um pet de cada raridade
 herdr-pet init                # trava a âncora do GitHub e choca o pet #0
 ```
 
 O `watch` inicializa sozinho se ainda não houver state.
+
+### Atalho automático
+
+O Herdr **não** registra teclas a partir do `herdr-plugin.toml` — só a partir do `config.toml` do usuário. Por isso o plugin grava sozinho um bloco managed:
+
+```toml
+# >>> herdr-pet (managed — do not edit)
+[[keys.command]]
+key = "prefix+a"
+type = "plugin_action"
+command = "allmight-ai.herdr-pet.open"
+description = "Pet: toggle (abre/fecha)"
+# <<< herdr-pet
+```
+
+Se `prefix+a` já estiver ocupado, tenta `prefix+shift+a` e depois `prefix+p`. O `[[startup]]` do plugin re-aplica isso a cada subida do server (útil após update).
 
 ## Como funciona
 
@@ -107,6 +139,7 @@ Species, rarity, name, and stats come from your GitHub ID. Wipe the state and ru
 - Shows the agent’s current task (`terminal_title`)
 - Forges species, rarity, shiny, name, and stats from GitHub
 - Toggles on demand with `prefix+a` in any workspace
+- **Hotkey + CLI PATH are configured automatically on install**
 - Runs only while the pane is open
 
 ### Install
@@ -114,33 +147,45 @@ Species, rarity, name, and stats come from your GitHub ID. Wipe the state and ru
 **Requirements:** [Herdr](https://herdr.dev) ≥ 0.7.4, [Rust](https://rustup.rs) (`cargo` on `PATH`). Linux and macOS.
 
 ```bash
-# From GitHub (install runs cargo build --release)
 herdr plugin install allmight-ai/herdr-pet
-
-# Local development (link does not build for you)
-cargo build --release
-herdr plugin link .
 ```
 
-| Action | Shortcut |
+That’s it. Install builds the binary, writes the hotkey into your Herdr config, puts `herdr-pet` on `~/.local/bin`, and reloads config if the server is running. **No hand-editing required.**
+
+| Action | How |
 | --- | --- |
 | Toggle the pet | `prefix+a` (Ctrl+b, release, then `a`) |
 | Resize | `prefix+r` |
+| Shell status | `herdr-pet status` |
 
-Restart Herdr if the hotkey does not work after install.
+Restart Herdr (or run `herdr-pet setup`) if the hotkey does not respond after install.
+
+#### Local development
+
+```bash
+cargo build --release
+herdr plugin link .
+# or just post-install wiring:
+./target/release/herdr-pet setup
+```
 
 ### Usage
 
 ```bash
-herdr-pet watch               # live house
+herdr-pet setup               # re-apply hotkey + PATH (idempotent)
+herdr-pet open                # toggle the pane (Herdr must be running)
+herdr-pet watch               # live house in the current terminal
 herdr-pet watch --mood done   # preview a mood
-herdr-pet open                # toggle the pane (hotkey target)
 herdr-pet status              # pet data
 herdr-pet gallery             # one pet per rarity tier
 herdr-pet init                # lock GitHub anchor and hatch pet #0
 ```
 
 `watch` auto-inits when there is no state yet.
+
+### Automatic hotkey
+
+Herdr does **not** load keybindings from `herdr-plugin.toml` — only from the user’s `config.toml`. The plugin therefore writes a managed block itself (see Portuguese section above). If `prefix+a` is taken, it falls back to `prefix+shift+a`, then `prefix+p`. A `[[startup]]` hook re-applies this on every server start (handy after plugin updates).
 
 ### How it works
 
