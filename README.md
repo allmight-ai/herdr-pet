@@ -24,8 +24,8 @@ LCD 1-bit. Leve, sob demanda, em qualquer workspace.
 ```bash
 cargo build --release
 ```
-No Herdr, **`prefix+alt+p`** (prefix = `Ctrl+b`, solta, depois `Alt+p`) abre/fecha o pet em
-toggle (split pequeno dockado). Ou direto:
+No Herdr, **`prefix+a`** (prefix = `Ctrl+b`, solta, depois `a`) abre/fecha o pet em toggle
+(split pequeno dockado). Ou direto:
 ```bash
 ./target/release/herdr-pet watch               # ao vivo — espelha o agente
 ./target/release/herdr-pet watch --mood done   # pré-visualiza um mood (dev)
