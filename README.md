@@ -1,10 +1,10 @@
 # herdr-pet
 
-Companion V-Pet para o [Herdr](https://herdr.dev). Espelha o status do seu agente de código e mostra a tarefa atual numa casinha LCD 1-bit. A raridade do pet é forjada a partir do seu ID do GitHub — apagar o state e rodar de novo gera o mesmo pet.
+Companion V-Pet para o [Herdr](https://herdr.dev): uma casinha LCD de 1 bit que espelha o status e a tarefa do seu agente de código.
 
-[English](#english)
+A espécie, a raridade, o nome e os stats vêm do seu ID do GitHub. Apagar o state e rodar de novo gera o **mesmo** pet — não há reroll.
 
-## Demonstração
+[English ↓](#english) · [Sponsor](https://github.com/sponsors/allmight-ai)
 
 ```
 ┌──────────────────────────────┐
@@ -20,56 +20,58 @@ Companion V-Pet para o [Herdr](https://herdr.dev). Espelha o status do seu agent
 └──────────────────────────────┘
 ```
 
-## O que faz
+## Recursos
 
-- Reage ao `agent_status` do Herdr (treinando, dormindo, curioso, comemorando, confuso).
-- Mostra a tarefa atual do agente (`terminal_title`).
-- Forja espécie, raridade, shiny, nome e stats a partir do ID do GitHub.
-- Abre e fecha sob demanda com `prefix+a` em qualquer workspace.
-- Só roda enquanto o pane está aberto; redesenha quando algo muda.
+- Reage ao `agent_status` do Herdr (treinando, dormindo, curioso, comemorando, confuso)
+- Mostra a tarefa atual do agente (`terminal_title`)
+- Forja espécie, raridade, shiny, nome e stats a partir do GitHub
+- Abre e fecha sob demanda com `prefix+a` em qualquer workspace
+- Só consome recurso enquanto o painel está aberto
 
-## Instalar
+## Instalação
 
-**Requisitos:** [Herdr](https://herdr.dev) ≥ 0.7.4 e [Rust](https://rustup.rs) (`cargo` no `PATH`). Linux e macOS.
+**Requisitos:** [Herdr](https://herdr.dev) ≥ 0.7.4, [Rust](https://rustup.rs) (`cargo` no `PATH`). Linux e macOS.
 
 ```bash
-# Do GitHub (roda `cargo build --release` no install)
+# Pelo GitHub (o install compila com cargo)
 herdr plugin install allmight-ai/herdr-pet
 
-# Desenvolvimento local (build à mão — o link não compila)
+# Desenvolvimento local (o link não compila sozinho)
 cargo build --release
 herdr plugin link .
 ```
 
 | Ação | Atalho |
 | --- | --- |
-| Abrir / fechar o pet | `prefix+a` (Ctrl+b, solta, `a`) |
+| Abrir / fechar o pet | `prefix+a` (Ctrl+b, soltar, depois `a`) |
 | Redimensionar | `prefix+r` |
 
-Se o atalho não responder depois de instalar, reinicie o Herdr.
-
-No marketplace do Herdr: repositórios com a topic GitHub [`herdr-plugin`](https://github.com/topics/herdr-plugin).
+Se o atalho não funcionar depois da instalação, reinicie o Herdr.
 
 ## Uso
 
 ```bash
 herdr-pet watch               # casinha ao vivo
-herdr-pet watch --mood done   # pré-visualiza um mood
-herdr-pet open                # abre/fecha o pane (o que o atalho chama)
+herdr-pet watch --mood done   # pré-visualiza um humor
+herdr-pet open                # abre ou fecha o painel (atalho)
 herdr-pet status              # dados do pet
-herdr-pet gallery             # um pet de cada tier
-herdr-pet init                # trava a âncora GitHub e choca o pet #0
+herdr-pet gallery             # um pet de cada raridade
+herdr-pet init                # trava a âncora do GitHub e choca o pet #0
 ```
 
-O `watch` faz auto-init se ainda não houver state.
+O `watch` inicializa sozinho se ainda não houver state.
 
 ## Como funciona
 
-**Forja.** `root_seed = HMAC(APP_SALT, github_id)`; cada pet é `HMAC(root_seed, "pet:N")`. Do seed saem espécie, raridade (60/25/10/4/1), shiny (1/128), IVs e nome. O mesmo par `(github_id, índice)` sempre produz o mesmo pet.
+**Forja.**  
+`root_seed = HMAC(APP_SALT, github_id)`; cada pet é `HMAC(root_seed, "pet:N")`.  
+Dali saem espécie, raridade (60 / 25 / 10 / 4 / 1), shiny (1/128), IVs e nome.  
+O mesmo par `(github_id, índice)` sempre produz o mesmo pet.
 
-**Espelho.** O pane `watch` lê o agente focado via socket API do Herdr (`herdr agent list`) e mapeia o status:
+**Espelho.**  
+O `watch` consulta o agente focado (`herdr agent list`) e mapeia o status:
 
-| `agent_status` | mood |
+| `agent_status` | humor |
 | --- | --- |
 | `working` | treinando |
 | `done` | comemorando |
@@ -77,64 +79,64 @@ O `watch` faz auto-init se ainda não houver state.
 | `idle` | dormindo |
 | `unknown` | confuso |
 
-A detecção usa o Screen Manifest do Herdr (Claude Code sem config extra). O agente precisa rodar num painel nativo do Herdr — tmux aninhado quebra a leitura.
+A detecção usa o Screen Manifest do Herdr (Claude Code sem configuração extra). O agente precisa estar num painel nativo do Herdr — tmux aninhado quebra a leitura.
 
-**State.** Âncora e índice ativo ficam em `HERDR_PLUGIN_STATE_DIR` (no Herdr) ou em `.herdr-pet-state/` (dev). A raridade não depende do arquivo: ela é rederivada da âncora.
+**State.**  
+Âncora e índice ativo ficam em `HERDR_PLUGIN_STATE_DIR` (no Herdr) ou em `.herdr-pet-state/` (dev).  
+A raridade não “mora” no arquivo: é recalculada a partir da âncora.
 
-## Stack
+## Stack e licença
 
-Rust (HMAC-SHA256 + renderer ANSI) e plugin nativo do Herdr (`herdr-plugin.toml`).
+Rust (HMAC-SHA256 + render ANSI) · plugin nativo do Herdr (`herdr-plugin.toml`)
 
-## Licença
-
-[AGPL-3.0-or-later](LICENSE).
-
-Inspirado no petterm (V-Pet LCD 1-bit).
+[AGPL-3.0-or-later](LICENSE) · inspirado no petterm (V-Pet LCD 1-bit)
 
 ---
 
 ## English
 
-A V-Pet companion for [Herdr](https://herdr.dev). It mirrors your coding agent's status and current task in a 1-bit LCD house. The pet's rarity is forged from your GitHub ID — wipe the state and re-run, and you get the same pet.
+A 1-bit LCD V-Pet companion for [Herdr](https://herdr.dev). It mirrors your coding agent’s status and current task.
+
+Species, rarity, name, and stats come from your GitHub ID. Wipe the state and run again — you get the **same** pet. No rerolls.
+
+[Sponsor](https://github.com/sponsors/allmight-ai)
 
 ### Features
 
-- Reacts to Herdr's `agent_status` (training, sleeping, curious, celebrating, confused).
-- Shows the agent's current task (`terminal_title`).
-- Forges species, rarity, shiny, name, and stats from your GitHub ID.
-- Toggles on demand with `prefix+a` in any workspace.
-- Runs only while the pane is open; redraws when something changes.
+- Reacts to Herdr `agent_status` (training, sleeping, curious, celebrating, confused)
+- Shows the agent’s current task (`terminal_title`)
+- Forges species, rarity, shiny, name, and stats from GitHub
+- Toggles on demand with `prefix+a` in any workspace
+- Runs only while the pane is open
 
 ### Install
 
-**Requirements:** [Herdr](https://herdr.dev) ≥ 0.7.4 and [Rust](https://rustup.rs) (`cargo` on `PATH`). Linux and macOS.
+**Requirements:** [Herdr](https://herdr.dev) ≥ 0.7.4, [Rust](https://rustup.rs) (`cargo` on `PATH`). Linux and macOS.
 
 ```bash
-# From GitHub (runs `cargo build --release` during install)
+# From GitHub (install runs cargo build --release)
 herdr plugin install allmight-ai/herdr-pet
 
-# Local development (build yourself — link does not compile)
+# Local development (link does not build for you)
 cargo build --release
 herdr plugin link .
 ```
 
 | Action | Shortcut |
 | --- | --- |
-| Toggle the pet | `prefix+a` (Ctrl+b, release, `a`) |
+| Toggle the pet | `prefix+a` (Ctrl+b, release, then `a`) |
 | Resize | `prefix+r` |
 
-Restart Herdr if the hotkey does not fire after install.
-
-Listed on the Herdr marketplace via the GitHub topic [`herdr-plugin`](https://github.com/topics/herdr-plugin).
+Restart Herdr if the hotkey does not work after install.
 
 ### Usage
 
 ```bash
 herdr-pet watch               # live house
 herdr-pet watch --mood done   # preview a mood
-herdr-pet open                # toggle the pane (what the hotkey runs)
+herdr-pet open                # toggle the pane (hotkey target)
 herdr-pet status              # pet data
-herdr-pet gallery             # one pet per tier
+herdr-pet gallery             # one pet per rarity tier
 herdr-pet init                # lock GitHub anchor and hatch pet #0
 ```
 
@@ -142,18 +144,20 @@ herdr-pet init                # lock GitHub anchor and hatch pet #0
 
 ### How it works
 
-**Forge.** `root_seed = HMAC(APP_SALT, github_id)`; each pet is `HMAC(root_seed, "pet:N")`. Species, rarity (60/25/10/4/1), shiny (1/128), IVs, and name come from that seed. The same `(github_id, index)` always yields the same pet.
+**Forge.**  
+`root_seed = HMAC(APP_SALT, github_id)`; each pet is `HMAC(root_seed, "pet:N")`.  
+That seed yields species, rarity (60 / 25 / 10 / 4 / 1), shiny (1/128), IVs, and name.  
+The same `(github_id, index)` always produces the same pet.
 
-**Mirror.** The `watch` pane reads the focused agent through Herdr's socket API (`herdr agent list`) and maps status to mood. Detection uses Herdr's Screen Manifest (Claude Code needs no extra config). The agent must run in a native Herdr pane — nested tmux breaks detection.
+**Mirror.**  
+`watch` polls the focused agent (`herdr agent list`) and maps status to mood. Detection uses Herdr’s Screen Manifest (Claude Code needs no extra config). The agent must run in a native Herdr pane — nested tmux breaks detection.
 
-**State.** Anchor and active index live under `HERDR_PLUGIN_STATE_DIR` (Herdr) or `.herdr-pet-state/` (dev). Rarity is not stored as truth on disk; it is re-derived from the anchor.
+**State.**  
+Anchor and active index live under `HERDR_PLUGIN_STATE_DIR` (Herdr) or `.herdr-pet-state/` (dev).  
+Rarity is not stored as ground truth; it is re-derived from the anchor.
 
-### Stack
+### Stack & license
 
-Rust (HMAC-SHA256 + ANSI renderer) and a native Herdr plugin (`herdr-plugin.toml`).
+Rust (HMAC-SHA256 + ANSI renderer) · native Herdr plugin (`herdr-plugin.toml`)
 
-### License
-
-[AGPL-3.0-or-later](LICENSE).
-
-Inspired by petterm (1-bit LCD V-Pet).
+[AGPL-3.0-or-later](LICENSE) · inspired by petterm (1-bit LCD V-Pet)
