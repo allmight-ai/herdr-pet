@@ -1,10 +1,13 @@
-# Python
+# Python (legado — referência petterm)
 __pycache__/
 *.py[cod]
 *.egg-info/
 .eggs/
 build/
 dist/
+
+# Rust (build output do plugin)
+/target
 
 # Ambientes virtuais
 .venv/
