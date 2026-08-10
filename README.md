@@ -18,6 +18,7 @@ A espécie, a raridade, o nome e os stats vêm do seu ID do GitHub. Apagar o sta
 │             ▄▀▀▄             │
 │        « treinando »         │
 └──────────────────────────────┘
+#0 · Nv 5 · ████████░░ 1200/1500 XP
 ```
 
 ## Recursos
@@ -25,6 +26,7 @@ A espécie, a raridade, o nome e os stats vêm do seu ID do GitHub. Apagar o sta
 - Reage ao `agent_status` do Herdr (treinando, dormindo, curioso, comemorando, confuso)
 - Mostra a tarefa atual do agente (`terminal_title`)
 - Forja espécie, raridade, shiny, nome e stats a partir do GitHub
+- Ganha XP e sobe de nível com o trabalho real do agente (curva até o nível 99)
 - Abre e fecha sob demanda com `prefix+a` em qualquer workspace
 - Atalho e CLI no PATH configurados **automaticamente** no install
 - Só consome recurso enquanto o painel está aberto
@@ -113,6 +115,9 @@ O `watch` consulta o agente focado (`herdr agent list`) e mapeia o status:
 
 A detecção usa o Screen Manifest do Herdr (Claude Code sem configuração extra). O agente precisa estar num painel nativo do Herdr — tmux aninhado quebra a leitura.
 
+**Progressão (XP e nível).**  
+O pet ganha XP só com trabalho real do agente: `working` ao vivo rende o ritmo cheio (~1000 XP/h); com o painel fechado, o trabalho é contabilizado na reabertura pelo `state_change_seq`, num ritmo menor. `idle` não rende XP. O nível (1–99) é derivado do XP total — cada nível pede mais que o anterior (`100 × nível`); chegar ao 99 é meta de longo prazo (~1 ano de uso). Ver `CONTEXT.md` e `docs/adr/0001-xp-from-real-agent-work.md`.
+
 **State.**  
 Âncora e índice ativo ficam em `HERDR_PLUGIN_STATE_DIR` (no Herdr) ou em `.herdr-pet-state/` (dev).  
 A raridade não “mora” no arquivo: é recalculada a partir da âncora.
@@ -138,6 +143,7 @@ Species, rarity, name, and stats come from your GitHub ID. Wipe the state and ru
 - Reacts to Herdr `agent_status` (training, sleeping, curious, celebrating, confused)
 - Shows the agent’s current task (`terminal_title`)
 - Forges species, rarity, shiny, name, and stats from GitHub
+- Earns XP and levels up from the agent's real work (curve up to level 99)
 - Toggles on demand with `prefix+a` in any workspace
 - **Hotkey + CLI PATH are configured automatically on install**
 - Runs only while the pane is open
@@ -196,6 +202,9 @@ The same `(github_id, index)` always produces the same pet.
 
 **Mirror.**  
 `watch` polls the focused agent (`herdr agent list`) and maps status to mood. Detection uses Herdr’s Screen Manifest (Claude Code needs no extra config). The agent must run in a native Herdr pane — nested tmux breaks detection.
+
+**Progression (XP & level).**  
+The pet earns XP only from the agent's real work: live `working` earns the full rate (~1000 XP/h); with the pane closed, work is tallied on reopen via `state_change_seq` at a lower rate. `idle` earns nothing. Level (1–99) is derived from total XP — each level needs more than the last (`100 × level`); reaching 99 is a long-term goal (~1 year of use). See `CONTEXT.md` and `docs/adr/0001-xp-from-real-agent-work.md`.
 
 **State.**  
 Anchor and active index live under `HERDR_PLUGIN_STATE_DIR` (Herdr) or `.herdr-pet-state/` (dev).  
