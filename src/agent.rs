@@ -72,13 +72,16 @@ struct AgentEntry {
     workspace_id: Option<String>,
     #[serde(default)]
     terminal_title_stripped: Option<String>,
+    #[serde(default)]
+    state_change_seq: u64,
 }
 
-/// Info do agente que o pet acompanha: status + tarefa atual (terminal_title_stripped).
+/// Info do agente que o pet acompanha: status + tarefa atual + seq (pro catch-up).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentInfo {
     pub status: AgentStatus,
     pub title: Option<String>,
+    pub state_change_seq: u64,
 }
 
 /// Agente que o pet deve espelhar: o **focado** (o que o programador dirige); senão o
@@ -104,6 +107,7 @@ pub fn focused_agent_info() -> Option<AgentInfo> {
     Some(AgentInfo {
         status: AgentStatus::from_herdr(&pick.agent_status),
         title,
+        state_change_seq: pick.state_change_seq,
     })
 }
 
@@ -129,10 +133,14 @@ mod tests {
     fn picks_focused_agent_from_envelope() {
         let raw = r#"{"id":"cli:agent:list","result":{"agents":[
             {"agent":"grok","agent_status":"idle","focused":false,"workspace_id":"w18"},
-            {"agent":"claude","agent_status":"working","focused":true,"workspace_id":"w19"}
+            {"agent":"claude","agent_status":"working","focused":true,"workspace_id":"w19","state_change_seq":48}
         ],"type":"agent_list"}}"#;
         let env: Envelope = serde_json::from_str(raw).unwrap();
         let pick = env.result.agents.iter().find(|a| a.focused).unwrap();
         assert_eq!(AgentStatus::from_herdr(&pick.agent_status), AgentStatus::Working);
+        assert_eq!(pick.state_change_seq, 48);
+        // ausente → default 0 (agente mais velho no mesmo workspace)
+        let grok = env.result.agents.iter().find(|a| !a.focused).unwrap();
+        assert_eq!(grok.state_change_seq, 0);
     }
 }

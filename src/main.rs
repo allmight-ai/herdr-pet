@@ -95,52 +95,89 @@ fn main() {
         }
         Cmd::Watch { id, mood } => {
             let forced = mood.as_deref().map(herdr_pet::AgentStatus::from_herdr);
-            let (gid, idx) = match (herdr_pet::state::load(), id) {
-                (Some(s), _) => (s.github_id, s.active_index),
-                (None, Some(i)) => (i, 0),
-                (None, None) => {
-                    // auto-init: resolve o GitHub e cria o state (pra o pane funcionar de cara)
-                    match herdr_pet::anchor::ensure_locked_state() {
-                        Ok(s) => (s.github_id, s.active_index),
-                        Err(e) => {
-                            eprintln!(
-                                "sem state e não consegui resolver o GitHub: {}\n(rode `herdr-pet init` ou passe --id N)",
-                                e
-                            );
-                            std::process::exit(1);
-                        }
+            // Resolve o state (mutável) — guardamos XP nele. `persist` = salva em disco.
+            let (mut state, persist) = match (herdr_pet::state::load(), id) {
+                (Some(s), _) => (s, true),
+                (None, Some(i)) => (herdr_pet::state::State::new(i), false), // dev transitório
+                (None, None) => match herdr_pet::anchor::ensure_locked_state() {
+                    Ok(s) => (s, true),
+                    Err(e) => {
+                        eprintln!(
+                            "sem state e não consegui resolver o GitHub: {}\n(rode `herdr-pet init` ou passe --id N)",
+                            e
+                        );
+                        std::process::exit(1);
                     }
-                }
+                },
             };
+            let gid = state.github_id;
+            let idx = state.active_index;
+
             use std::io::Write;
             use std::sync::atomic::{AtomicBool, Ordering};
             use std::sync::Arc;
+            use std::time::Instant;
+            use herdr_pet::progression::{level_view, Accrual};
+            use herdr_pet::render::{bar, BOLD, DIM, RESET};
+
             let running = Arc::new(AtomicBool::new(true));
             let r = running.clone();
             let _ = ctrlc::set_handler(move || {
                 r.store(false, Ordering::SeqCst);
             });
-            // alternate screen buffer: não suja nem scrolla o terminal principal
-            print!("\x1b[?1049h");
+            print!("\x1b[?1049h"); // alternate screen buffer
             let _ = std::io::stdout().flush();
+
             // Otimização: o pet é imutável pra (gid, idx) — forja UMA vez, cacheia.
-            // (antes re-forjava a cada frame, à toa.)
             let pet = hatch(gid, idx);
+
             let mut frame = 0u32;
             let mut status = forced.unwrap_or(herdr_pet::AgentStatus::Idle);
             let mut title: Option<String> = None;
-            let mut last_sig: Option<(herdr_pet::AgentStatus, u32, Option<String>)> = None;
+
+            // Catch-up na abertura: trabalho do agente que rolou com o pane fechado,
+            // medido pelo delta do state_change_seq (ritmo menor). Só sem --mood.
+            if forced.is_none() {
+                if let Some(info) = herdr_pet::agent::focused_agent_info() {
+                    status = info.status;
+                    title = info.title;
+                    state.apply_catchup(info.state_change_seq);
+                }
+            }
+
+            // Acumulador de XP por tempo de trabalho acompanhado (dt real).
+            let mut accrual = Accrual::new();
+            let mut last_instant = Instant::now();
+
+            // Save periódico (~30s) e só se o XP mudou — sem I/O de disco a cada tick.
+            let mut last_save_frame = 0u32;
+            let mut last_saved_xp = state.xp;
+            const SAVE_EVERY_FRAMES: u32 = 36; // ~30s (ciclo ~0,8s)
+
+            // sig = o que determina redraw. Inclui nível + XP p/ redesenhar ao subir.
+            let mut last_sig: Option<(herdr_pet::AgentStatus, u32, Option<String>, u8, u64)> = None;
+
             while running.load(Ordering::SeqCst) {
-                // Poll do agente a cada ~3s (3 ticks × ~0,8s) — status + tarefa. Só sem --mood.
+                // Poll do agente a cada ~2,4s (3 frames) — status + tarefa + seq. Só sem --mood.
                 if forced.is_none() && frame % 3 == 0 {
                     if let Some(info) = herdr_pet::agent::focused_agent_info() {
                         status = info.status;
                         title = info.title;
+                        state.last_state_change_seq = info.state_change_seq;
                     }
                 }
-                // Redraw só quando algo visível muda: status, tarefa ou fase da animação.
+                // Accrue de XP quando o agente trabalha (dt real desde o último ciclo).
+                let now = Instant::now();
+                let dt = now.duration_since(last_instant);
+                last_instant = now;
+                if matches!(status, herdr_pet::AgentStatus::Working) {
+                    state.xp += accrual.add_working(dt);
+                }
+
+                // Redraw só quando algo visível muda (status, fase da anim, tarefa, nível/XP).
+                let lv = level_view(state.xp);
                 let period = herdr_pet::render::animation_period(status, &pet);
-                let sig = (status, frame % period, title.clone());
+                let sig = (status, frame % period, title.clone(), lv.level, lv.xp_into);
                 if last_sig.as_ref() != Some(&sig) {
                     print!("\x1b[H\x1b[J"); // topo + limpa até o fim (sem scrollar)
                     println!(
@@ -148,16 +185,32 @@ fn main() {
                         herdr_pet::render::render_casinha(&pet, frame, status, title.as_deref())
                     );
                     println!();
-                    println!(
-                        "{}github:{} · pet #{} · Ctrl+C para sair{}",
-                        herdr_pet::render::DIM,
-                        gid,
-                        idx,
-                        herdr_pet::render::RESET
-                    );
+                    if lv.xp_span > 0 {
+                        println!(
+                            "{DIM}#{idx} · {BOLD}Nv {}{RESET}{DIM} · {RESET}{}{DIM} {}/{} XP · Ctrl+C{RESET}",
+                            lv.level,
+                            bar(lv.xp_into as u16, lv.xp_span as u16, 10),
+                            lv.xp_into,
+                            lv.xp_span,
+                        );
+                    } else {
+                        println!("{DIM}#{idx} · {BOLD}Nv 99 ★ máximo{RESET}{DIM} · Ctrl+C{RESET}");
+                    }
                     let _ = std::io::stdout().flush();
                     last_sig = Some(sig);
                 }
+
+                // Save periódico (sem ddos de disco): ~a cada 30s, só se o XP mudou.
+                if persist
+                    && state.xp != last_saved_xp
+                    && frame.wrapping_sub(last_save_frame) >= SAVE_EVERY_FRAMES
+                {
+                    if herdr_pet::state::save(&state).is_ok() {
+                        last_saved_xp = state.xp;
+                        last_save_frame = frame;
+                    }
+                }
+
                 // sleep em passos pra responder rápido ao Ctrl+C (~0,8s/ciclo)
                 for _ in 0..16 {
                     if !running.load(Ordering::SeqCst) {
@@ -167,6 +220,12 @@ fn main() {
                 }
                 frame = frame.wrapping_add(1);
             }
+
+            // Save final na saída (Ctrl+C) — não perde o progresso da sessão.
+            if persist && state.xp != last_saved_xp {
+                let _ = herdr_pet::state::save(&state);
+            }
+
             print!("\x1b[?1049l"); // restaura o buffer principal
             let _ = std::io::stdout().flush();
         }

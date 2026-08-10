@@ -8,12 +8,20 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::progression::{level_for_xp, xp_for_catchup};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct State {
     pub anchor: String,
     pub github_id: u64,
     pub active_index: u32,
     pub hatched: Vec<u32>,
+    /// XP total do pet ativo. Ausente em states antigos → default 0.
+    #[serde(default)]
+    pub xp: u64,
+    /// Último `state_change_seq` visto do agente (pro catch-up de trabalho não acompanhado).
+    #[serde(default)]
+    pub last_state_change_seq: u64,
 }
 
 impl State {
@@ -24,6 +32,8 @@ impl State {
             github_id,
             active_index: 0,
             hatched: vec![0],
+            xp: 0,
+            last_state_change_seq: 0,
         }
     }
 
@@ -33,6 +43,27 @@ impl State {
             self.hatched.push(index);
         }
         self.active_index = index;
+    }
+
+    /// Nível atual do pet ativo (1..=99), derivado do XP total.
+    pub fn level(&self) -> u8 {
+        level_for_xp(self.xp)
+    }
+
+    /// Contabiliza trabalho do agente observado enquanto o pane estava fechado.
+    /// Primeira observação (seq 0) trava a baseline sem creditar histórico;
+    /// nas seguintes, concede XP pelo delta (ritmo de catch-up) e avança o seq.
+    /// Devolve o XP ganho.
+    pub fn apply_catchup(&mut self, observed_seq: u64) -> u64 {
+        let gained = if self.last_state_change_seq == 0 {
+            0
+        } else {
+            let delta = observed_seq.saturating_sub(self.last_state_change_seq);
+            xp_for_catchup(delta)
+        };
+        self.last_state_change_seq = observed_seq;
+        self.xp += gained;
+        gained
     }
 }
 
