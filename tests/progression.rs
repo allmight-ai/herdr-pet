@@ -7,7 +7,9 @@
 
 use std::time::Duration;
 
-use herdr_pet::progression::{level_for_xp, level_view, xp_for_catchup, xp_to_reach, Accrual};
+use herdr_pet::progression::{
+    harmonic_milli, level_for_xp, level_view, xp_for_catchup, xp_to_reach, Accrual,
+};
 
 // --- curva ---
 
@@ -77,24 +79,30 @@ fn cada_nivel_pede_mais_xp_que_o_anterior() {
 #[test]
 fn accrual_zero_por_zero_tempo() {
     let mut a = Accrual::new();
-    assert_eq!(a.add_working(Duration::ZERO), 0);
+    assert_eq!(a.add_working(Duration::ZERO, 1000), 0);
 }
 
 #[test]
 fn accrual_bate_mil_xp_por_hora_acompanhando() {
-    // 1 hora de trabalho acompanhado = 1000 XP (alvo de ~1 ano até o 99).
+    // 1 agente (mult 1000) · 1 hora = 1000 XP.
     let mut a = Accrual::new();
-    assert_eq!(a.add_working(Duration::from_secs(3600)), 1000);
+    assert_eq!(a.add_working(Duration::from_secs(3600), 1000), 1000);
+}
+
+#[test]
+fn accrual_respeita_multiplicador_de_largura() {
+    // 2 agentes working → H(2)=1500 · 1 hora = 1500 XP (1,5× o base, não 2×).
+    let mut a = Accrual::new();
+    assert_eq!(a.add_working(Duration::from_secs(3600), 1500), 1500);
 }
 
 #[test]
 fn accrual_acumula_sub_xp_sem_perder() {
-    // Em ticks pequenos (0,8s) o XP é fracionário; o acumulador carrega o resto.
     let mut a = Accrual::new();
     let mut total = 0u64;
     for _ in 0..45 {
         // 45 × 0,8s = 36s → a 1000 XP/hora = 10 XP
-        total += a.add_working(Duration::from_millis(800));
+        total += a.add_working(Duration::from_millis(800), 1000);
     }
     assert_eq!(total, 10);
 }
@@ -134,4 +142,31 @@ fn level_view_no_topo() {
     assert_eq!((level_view(485_100).level, 0u64, 0u64), (99u8, 0, 0));
     let v = level_view(u64::MAX);
     assert_eq!((v.level, v.xp_into, v.xp_span), (99, 0, 0));
+}
+
+// --- curva de largura: decaimento harmônico por nº de agentes ---
+
+#[test]
+fn harmonic_um_agente_e_ritmo_cheio() {
+    assert_eq!(harmonic_milli(0), 0);
+    assert_eq!(harmonic_milli(1), 1000); // 1 agente = 1×, sem penalidade
+}
+
+#[test]
+fn harmonic_cresce_sublinearmente() {
+    // H(n)×1000: 1 + 1/2 + 1/3 + … — cresce, mas cada novo agente adiciona menos.
+    assert_eq!(harmonic_milli(2), 1500);
+    assert_eq!(harmonic_milli(3), 1833);
+    assert_eq!(harmonic_milli(5), 2283);
+}
+
+#[test]
+fn harmonic_satura_e_eh_monotono() {
+    assert_eq!(harmonic_milli(100), harmonic_milli(8)); // teto da tabela
+    let mut anterior = 0u64;
+    for n in 0..=20usize {
+        let v = harmonic_milli(n);
+        assert!(v >= anterior, "deixou de ser monótono em n={n}");
+        anterior = v;
+    }
 }

@@ -35,16 +35,17 @@ O posto do pet, de 1 a 99. Derivado do XP total por uma curva — não é guarda
 _Avoid_: rank
 
 **Trabalho acompanhado**:
-Período em que o pane do pet está aberto e o agente está `working`. Rende XP no ritmo cheio.
+Período em que o pane do pet está aberto e **qualquer** agente está `working`. Rende XP no ritmo cheio por agente efetivo (vários agentes sofrem decaimento — ver Largura).
 _Avoid_: farm ativo, grind
 
 **Trabalho não acompanhado**:
 Trabalho do agente que rolou com o pane fechado. Contabilizado na reabertura do pet, num ritmo menor que o acompanhado.
 _Avoid_: XP passivo, idle XP
 
+**Largura (decaimento harmônico)**:
+Vários agentes trabalhando rendem menos cada (1, ½, ⅓, …). Anti-proliferação — multiplicar agentes não multiplica XP.
+_Avoid_: bônus por agente, multiplicador linear
+
 **Sinal de trabalho**:
 O indicador, lido do Herdr, de que o agente de fato trabalhou: o status `working` e o contador `state_change_seq`. Não editável localmente — base do anti-cheat.
 _Avoid_: contador de tempo, heartbeat
-
-**Rebirth**:
-(Futuro) reset no nível 99, com marcador cosmético e bônus. Fora do escopo atual.

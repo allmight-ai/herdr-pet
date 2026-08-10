@@ -1,4 +1,4 @@
-use herdr_pet::state::{load_from, save_to, State};
+use herdr_pet::state::{load_from, save_to, PaneSeq, State};
 use std::path::PathBuf;
 
 fn tmp(name: &str) -> PathBuf {
@@ -42,7 +42,7 @@ fn state_antigo_sem_xp_carrega_com_zero() {
     let loaded = load_from(&path).unwrap();
     assert_eq!(loaded.github_id, 1);
     assert_eq!(loaded.xp, 0);
-    assert_eq!(loaded.last_state_change_seq, 0);
+    assert!(loaded.last_seq_by_pane.is_empty());
     assert_eq!(loaded.level(), 1); // 0 XP → nível 1
     let _ = std::fs::remove_file(&path);
 }
@@ -60,22 +60,51 @@ fn state_com_xp_faz_roundtrip_e_deriva_nivel() {
 }
 
 #[test]
-fn apply_catchup_primeira_observacao_nao_credita_historico() {
-    // State novo/migrado (last_seq == 0): a 1ª observação trava a baseline,
-    // sem conceder XP pelo trabalho histórico do agente. O pet cresce daqui p/ frente.
+fn apply_catchup_primeira_vista_nao_credita_historico() {
+    // State novo: a 1ª vista de cada pane trava baseline, sem creditar histórico.
     let mut s = State::new(1);
-    let gained = s.apply_catchup(57);
+    let gained = s.apply_catchup(&[PaneSeq { pane_id: "w1:p1".into(), seq: 57 }]);
     assert_eq!(gained, 0);
     assert_eq!(s.xp, 0);
-    assert_eq!(s.last_state_change_seq, 57); // baseline travada
+    assert_eq!(s.last_seq_by_pane.get("w1:p1"), Some(&57));
 }
 
 #[test]
-fn apply_catchup_credita_delta_e_atualiza_seq() {
-    // Observações seguintes: XP pelo delta desde a última vez, e seq avança.
+fn apply_catchup_credita_delta_de_um_agente() {
     let mut s = State::new(1);
-    s.apply_catchup(100); // baseline
-    let gained = s.apply_catchup(150); // delta de 50
+    s.apply_catchup(&[PaneSeq { pane_id: "w1:p1".into(), seq: 100 }]); // baseline
+    let gained = s.apply_catchup(&[PaneSeq { pane_id: "w1:p1".into(), seq: 150 }]); // delta 50
     assert_eq!(gained, herdr_pet::progression::xp_for_catchup(50));
-    assert_eq!(s.last_state_change_seq, 150);
+    assert_eq!(s.last_seq_by_pane.get("w1:p1"), Some(&150));
+}
+
+#[test]
+fn apply_catchup_multiplos_agentes_aplica_curva_harmonica() {
+    // 2 agentes, cada um delta 50: linear = 2×xp_for_catchup(50); curva H(2)/2 = 0,75.
+    let mut s = State::new(1);
+    s.apply_catchup(&[
+        PaneSeq { pane_id: "w1:p1".into(), seq: 100 },
+        PaneSeq { pane_id: "w2:p2".into(), seq: 200 },
+    ]);
+    let gained = s.apply_catchup(&[
+        PaneSeq { pane_id: "w1:p1".into(), seq: 150 },
+        PaneSeq { pane_id: "w2:p2".into(), seq: 250 },
+    ]);
+    let linear = 2 * herdr_pet::progression::xp_for_catchup(50);
+    assert_eq!(gained, linear * 750 / 1000);
+    assert!(gained < linear, "a curva tem que reduzir vs linear");
+}
+
+#[test]
+fn apply_catchup_pane_duplicado_nao_gera_xp_fantasma() {
+    // Mesmo pane 2× (ex.: pane_id ausente → ""): conta UMA vez (maior delta), sem um
+    // agente ler o insert do outro dentro da mesma chamada e gerar XP fantasma.
+    let mut s = State::new(1);
+    s.apply_catchup(&[PaneSeq { pane_id: "w1:p1".into(), seq: 100 }]); // baseline
+    let gained = s.apply_catchup(&[
+        PaneSeq { pane_id: "w1:p1".into(), seq: 150 },
+        PaneSeq { pane_id: "w1:p1".into(), seq: 200 },
+    ]);
+    // Só o maior delta (200−100) conta; o segundo registro não dobra nem vira fantasma.
+    assert_eq!(gained, herdr_pet::progression::xp_for_catchup(100));
 }

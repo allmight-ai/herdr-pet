@@ -18,7 +18,7 @@ A espécie, a raridade, o nome e os stats vêm do seu ID do GitHub. Apagar o sta
 │             ▄▀▀▄             │
 │        « treinando »         │
 └──────────────────────────────┘
-#0 · Nv 5 · ████████░░ 1200/1500 XP
+#0 · Nv 5 · ████████░░ 1200/1500 XP · 1w
 ```
 
 ## Recursos
@@ -116,7 +116,7 @@ O `watch` consulta o agente focado (`herdr agent list`) e mapeia o status:
 A detecção usa o Screen Manifest do Herdr (Claude Code sem configuração extra). O agente precisa estar num painel nativo do Herdr — tmux aninhado quebra a leitura.
 
 **Progressão (XP e nível).**  
-O pet ganha XP só com trabalho real do agente: `working` ao vivo rende o ritmo cheio (~1000 XP/h); com o painel fechado, o trabalho é contabilizado na reabertura pelo `state_change_seq`, num ritmo menor. `idle` não rende XP. O nível (1–99) é derivado do XP total — cada nível pede mais que o anterior (`100 × nível`); chegar ao 99 é meta de longo prazo (~1 ano de uso). Ver `CONTEXT.md` e `docs/adr/0001-xp-from-real-agent-work.md`.
+O pet ganha XP só com trabalho **real de qualquer agente** — conta todos os projetos, não só o focado. 1 agente `working` rende o ritmo cheio (~1000 XP/h); cada agente extra rende menos (½, ⅓, … — decaimento harmônico, anti-proliferação). Com o painel fechado, o trabalho é contabilizado na reabertura pelo `state_change_seq`, num ritmo menor. `idle` não rende XP. O nível (1–99) é derivado do XP total — cada nível pede mais que o anterior (`100 × nível`); chegar ao 99 é meta de longo prazo (~1 ano). Ver `CONTEXT.md` e `docs/adr/`.
 
 **State.**  
 Âncora e índice ativo ficam em `HERDR_PLUGIN_STATE_DIR` (no Herdr) ou em `.herdr-pet-state/` (dev).  
@@ -204,7 +204,7 @@ The same `(github_id, index)` always produces the same pet.
 `watch` polls the focused agent (`herdr agent list`) and maps status to mood. Detection uses Herdr’s Screen Manifest (Claude Code needs no extra config). The agent must run in a native Herdr pane — nested tmux breaks detection.
 
 **Progression (XP & level).**  
-The pet earns XP only from the agent's real work: live `working` earns the full rate (~1000 XP/h); with the pane closed, work is tallied on reopen via `state_change_seq` at a lower rate. `idle` earns nothing. Level (1–99) is derived from total XP — each level needs more than the last (`100 × level`); reaching 99 is a long-term goal (~1 year of use). See `CONTEXT.md` and `docs/adr/0001-xp-from-real-agent-work.md`.
+The pet earns XP only from **any agent's** real work — it counts all projects, not just the focused one. 1 working agent earns the full rate (~1000 XP/h); each extra agent earns less (½, ⅓, … — harmonic decay, anti-proliferação). With the pane closed, work is tallied on reopen via `state_change_seq` at a lower rate. `idle` earns nothing. Level (1–99) is derived from total XP — each level needs more than the last (`100 × level`); reaching 99 is a long-term goal (~1 year). See `CONTEXT.md` and `docs/adr/`.
 
 **State.**  
 Anchor and active index live under `HERDR_PLUGIN_STATE_DIR` (Herdr) or `.herdr-pet-state/` (dev).  

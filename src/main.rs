@@ -117,7 +117,8 @@ fn main() {
             use std::sync::atomic::{AtomicBool, Ordering};
             use std::sync::Arc;
             use std::time::Instant;
-            use herdr_pet::progression::{level_view, Accrual};
+            use herdr_pet::agent::all_agents_info;
+            use herdr_pet::progression::{harmonic_milli, level_view, Accrual};
             use herdr_pet::render::{bar, BOLD, DIM, RESET};
 
             let running = Arc::new(AtomicBool::new(true));
@@ -134,15 +135,21 @@ fn main() {
             let mut frame = 0u32;
             let mut status = forced.unwrap_or(herdr_pet::AgentStatus::Idle);
             let mut title: Option<String> = None;
+            // nº de agentes trabalhando agora (multiplicador harmônico do XP live).
+            let mut n_working: usize =
+                if matches!(status, herdr_pet::AgentStatus::Working) { 1 } else { 0 };
 
-            // Catch-up na abertura: trabalho do agente que rolou com o pane fechado,
-            // medido pelo delta do state_change_seq (ritmo menor). Só sem --mood.
+            // Catch-up na abertura: trabalho de TODOS os agentes enquanto o pane esteve
+            // fechado. Display espelha o focado; XP agrega todos (com decaimento). Só sem --mood.
             if forced.is_none() {
-                if let Some(info) = herdr_pet::agent::focused_agent_info() {
-                    status = info.status;
-                    title = info.title;
-                    state.apply_catchup(info.state_change_seq);
+                let agents = all_agents_info();
+                let (focused, working, pane_seqs) = agents_snapshot(&agents);
+                if let Some(f) = focused {
+                    status = f.status;
+                    title = f.title.clone();
                 }
+                n_working = working;
+                state.apply_catchup(&pane_seqs);
             }
 
             // Acumulador de XP por tempo de trabalho acompanhado (dt real).
@@ -158,20 +165,25 @@ fn main() {
             let mut last_sig: Option<(herdr_pet::AgentStatus, u32, Option<String>, u8, u64)> = None;
 
             while running.load(Ordering::SeqCst) {
-                // Poll do agente a cada ~2,4s (3 frames) — status + tarefa + seq. Só sem --mood.
+                // Poll a cada ~2,4s (3 frames): snapshot único — focado (display),
+                // nº working (XP live) e pares (pane,seq) pra trackear sem dupla contagem.
                 if forced.is_none() && frame % 3 == 0 {
-                    if let Some(info) = herdr_pet::agent::focused_agent_info() {
-                        status = info.status;
-                        title = info.title;
-                        state.last_state_change_seq = info.state_change_seq;
+                    let agents = all_agents_info();
+                    let (focused, working, pane_seqs) = agents_snapshot(&agents);
+                    if let Some(f) = focused {
+                        status = f.status;
+                        title = f.title.clone();
                     }
+                    n_working = working;
+                    state.observe_seq(&pane_seqs); // trackeia sem creditar (o live cuida do acompanhado)
                 }
-                // Accrue de XP quando o agente trabalha (dt real desde o último ciclo).
+                // XP live: ritmo base × H(n_working). Sem working → multiplicador 0 → nada.
                 let now = Instant::now();
                 let dt = now.duration_since(last_instant);
                 last_instant = now;
-                if matches!(status, herdr_pet::AgentStatus::Working) {
-                    state.xp += accrual.add_working(dt);
+                let mult = harmonic_milli(n_working);
+                if mult > 0 {
+                    state.xp += accrual.add_working(dt, mult);
                 }
 
                 // Redraw só quando algo visível muda (status, fase da anim, tarefa, nível/XP).
@@ -187,14 +199,18 @@ fn main() {
                     println!();
                     if lv.xp_span > 0 {
                         println!(
-                            "{DIM}#{idx} · {BOLD}Nv {}{RESET}{DIM} · {RESET}{}{DIM} {}/{} XP · Ctrl+C{RESET}",
+                            "{DIM}#{idx} · {BOLD}Nv {}{RESET}{DIM} · {RESET}{}{DIM} {}/{} XP · {}w{RESET}",
                             lv.level,
                             bar(lv.xp_into as u16, lv.xp_span as u16, 10),
                             lv.xp_into,
                             lv.xp_span,
+                            n_working,
                         );
                     } else {
-                        println!("{DIM}#{idx} · {BOLD}Nv 99 ★ máximo{RESET}{DIM} · Ctrl+C{RESET}");
+                        println!(
+                            "{DIM}#{idx} · {BOLD}Nv 99 ★ máximo{RESET}{DIM} · {}w · Ctrl+C{RESET}",
+                            n_working
+                        );
                     }
                     let _ = std::io::stdout().flush();
                     last_sig = Some(sig);
@@ -432,6 +448,31 @@ fn focused_workspace_id() -> Option<String> {
     v["result"]["pane"]["workspace_id"]
         .as_str()
         .map(String::from)
+}
+
+/// Snapshot dos agentes detectados: focado (display), nº working (multiplicador do XP)
+/// e pares `(pane_id, seq)` pro catch-up/trackeio. Um único `herdr agent list` resolve tudo.
+fn agents_snapshot(
+    agents: &[herdr_pet::AgentInfo],
+) -> (Option<&herdr_pet::AgentInfo>, usize, Vec<herdr_pet::state::PaneSeq>) {
+    let ws = std::env::var("HERDR_WORKSPACE_ID").ok();
+    let focused = agents
+        .iter()
+        .find(|a| a.focused)
+        .or_else(|| agents.iter().find(|a| a.workspace_id.as_deref() == ws.as_deref()))
+        .or_else(|| agents.first());
+    let working = agents
+        .iter()
+        .filter(|a| matches!(a.status, herdr_pet::AgentStatus::Working))
+        .count();
+    let pane_seqs = agents
+        .iter()
+        .map(|a| herdr_pet::state::PaneSeq {
+            pane_id: a.pane_id.clone(),
+            seq: a.state_change_seq,
+        })
+        .collect();
+    (focused, working, pane_seqs)
 }
 
 /// **Toggle** do pet (pro hotkey): se já existe um pane do pet neste workspace, fecha;

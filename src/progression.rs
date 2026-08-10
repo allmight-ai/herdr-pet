@@ -67,10 +67,12 @@ impl Accrual {
         Self { acc: 0 }
     }
 
-    /// Contabiliza `dt` de trabalho; devolve o XP inteiro ganho e guarda o resto.
-    pub fn add_working(&mut self, dt: Duration) -> u64 {
+    /// Contabiliza `dt` de trabalho a `mult_milli` (1000 = 1× ritmo base; passe
+    /// `harmonic_milli(n_working)` pra multi-agente). Devolve o XP inteiro ganho e
+    /// guarda o resto — matemática inteira, sem truncar por tick.
+    pub fn add_working(&mut self, dt: Duration, mult_milli: u64) -> u64 {
         let ms = dt.as_millis() as u64;
-        self.acc += ms * XP_PER_HOUR_ACCOMPANIED;
+        self.acc += ms * XP_PER_HOUR_ACCOMPANIED * mult_milli / MILLI;
         let whole = self.acc / MS_PER_HOUR;
         self.acc %= MS_PER_HOUR;
         whole
@@ -87,4 +89,17 @@ pub const MAX_CATCHUP_DELTA: u64 = 2_000;
 /// XP de catch-up a partir do delta do `state_change_seq` (trabalho não acompanhado).
 pub fn xp_for_catchup(seq_delta: u64) -> u64 {
     seq_delta.min(MAX_CATCHUP_DELTA) * XP_PER_SEQ_CATCHUP
+}
+
+/// Multiplicador de "largura" H(n)×1000: o N-ésimo agente trabalhando contribui com
+/// 1/N do ritmo base (série harmônica), então proliferar agentes rende cada vez menos
+/// — anti-inflação. Tabela pré-computada; satura no teto. `n=0 → 0`, `n=1 → 1000`
+/// (1 agente = ritmo cheio, sem penalidade).
+/// Escala de milli (1000 = 1×) usada por `harmonic_milli` e pelos multiplicadores de ritmo.
+pub const MILLI: u64 = 1000;
+
+pub fn harmonic_milli(n: usize) -> u64 {
+    // H(0..=8)×1000: 0, 1000, 1500, 1833, 2083, 2283, 2450, 2593, 2718
+    const TABLE: [u64; 9] = [0, 1000, 1500, 1833, 2083, 2283, 2450, 2593, 2718];
+    TABLE[n.min(TABLE.len() - 1)]
 }

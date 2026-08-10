@@ -74,22 +74,58 @@ struct AgentEntry {
     terminal_title_stripped: Option<String>,
     #[serde(default)]
     state_change_seq: u64,
+    #[serde(default)]
+    pane_id: String,
 }
 
-/// Info do agente que o pet acompanha: status + tarefa atual + seq (pro catch-up).
+/// Info do agente que o pet acompanha: status + tarefa + seq (pro catch-up) +
+/// pane_id (chave do seq por agente) + focused (display espelha o focado).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentInfo {
     pub status: AgentStatus,
     pub title: Option<String>,
     pub state_change_seq: u64,
+    pub pane_id: String,
+    pub workspace_id: Option<String>,
+    pub focused: bool,
 }
 
-/// Agente que o pet deve espelhar: o **focado** (o que o programador dirige); senão o
-/// do mesmo workspace do pane; senão o primeiro. `None` se não há agente ou a leitura falhar.
+/// Lê **todos** os agentes detectados do Herdr (vazio se a leitura falhar).
+fn list_entries() -> Vec<AgentEntry> {
+    let Some(stdout) = run_herdr(&["agent", "list"]) else {
+        return Vec::new();
+    };
+    let Ok(env) = serde_json::from_slice::<Envelope>(&stdout) else {
+        return Vec::new();
+    };
+    env.result.agents
+}
+
+fn entry_to_info(a: &AgentEntry) -> AgentInfo {
+    let title = a
+        .terminal_title_stripped
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    AgentInfo {
+        status: AgentStatus::from_herdr(&a.agent_status),
+        title,
+        state_change_seq: a.state_change_seq,
+        pane_id: a.pane_id.clone(),
+        workspace_id: a.workspace_id.clone(),
+        focused: a.focused,
+    }
+}
+
+/// Info de **todos** os agentes detectados — pra agregar trabalho (XP) em todos os projetos.
+pub fn all_agents_info() -> Vec<AgentInfo> {
+    list_entries().iter().map(entry_to_info).collect()
+}
+
+/// Agente que o pet deve espelhar (display): o **focado**; senão o do mesmo workspace;
+/// senão o primeiro. `None` se não há agente ou a leitura falhar.
 pub fn focused_agent_info() -> Option<AgentInfo> {
-    let stdout = run_herdr(&["agent", "list"])?;
-    let env: Envelope = serde_json::from_slice(&stdout).ok()?;
-    let agents = env.result.agents;
+    let agents = list_entries();
     if agents.is_empty() {
         return None;
     }
@@ -99,16 +135,7 @@ pub fn focused_agent_info() -> Option<AgentInfo> {
         .find(|a| a.focused)
         .or_else(|| agents.iter().find(|a| a.workspace_id.as_deref() == ws.as_deref()))
         .or_else(|| agents.first())?;
-    let title = pick
-        .terminal_title_stripped
-        .as_ref()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-    Some(AgentInfo {
-        status: AgentStatus::from_herdr(&pick.agent_status),
-        title,
-        state_change_seq: pick.state_change_seq,
-    })
+    Some(entry_to_info(pick))
 }
 
 /// Só o status (compat). Veja `focused_agent_info` pra status + tarefa.
@@ -133,14 +160,16 @@ mod tests {
     fn picks_focused_agent_from_envelope() {
         let raw = r#"{"id":"cli:agent:list","result":{"agents":[
             {"agent":"grok","agent_status":"idle","focused":false,"workspace_id":"w18"},
-            {"agent":"claude","agent_status":"working","focused":true,"workspace_id":"w19","state_change_seq":48}
+            {"agent":"claude","agent_status":"working","focused":true,"workspace_id":"w19","state_change_seq":48,"pane_id":"w19:pB"}
         ],"type":"agent_list"}}"#;
         let env: Envelope = serde_json::from_str(raw).unwrap();
         let pick = env.result.agents.iter().find(|a| a.focused).unwrap();
         assert_eq!(AgentStatus::from_herdr(&pick.agent_status), AgentStatus::Working);
         assert_eq!(pick.state_change_seq, 48);
-        // ausente → default 0 (agente mais velho no mesmo workspace)
+        assert_eq!(pick.pane_id, "w19:pB");
+        // ausente → default (0 seq, "" pane_id)
         let grok = env.result.agents.iter().find(|a| !a.focused).unwrap();
         assert_eq!(grok.state_change_seq, 0);
+        assert_eq!(grok.pane_id, "");
     }
 }

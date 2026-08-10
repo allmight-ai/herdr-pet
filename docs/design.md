@@ -18,16 +18,16 @@ O state no disco guarda só âncora, índice ativo e o que já chocamos. A rarid
 
 ## Stats
 
-Seis IVs (0–31) no padrão Pokémon e stats de combate: HP, SP, ATK, DEF, SpA, SpD, SPE. Base por tier + IV. Hoje são identidade cosmética forjada — a força efetiva passa a derivar do nível (ver Progressão; o combate que liga isso é a próxima fase).
+Seis IVs (0–31) no padrão Pokémon e stats de combate: HP, SP, ATK, DEF, SpA, SpD, SPE. Base por tier + IV. Hoje são identidade cosmética forjada — a força efetiva deriva do nível (ver Progressão).
 
 ## Progressão (XP e nível)
 
-O pet ganha XP só com **trabalho real** do agente — nunca de tempo idle:
+O pet ganha XP só com **trabalho real de qualquer agente** — conta todos os projetos, nunca de tempo idle:
 
-- **Acompanhado** (painel aberto + agente `working`): ritmo cheio, ~1000 XP/h.
-- **Não acompanhado** (painel fechado): contabilizado na reabertura pelo delta do `state_change_seq`, num ritmo menor.
+- **Acompanhado** (painel aberto + agentes `working`): 1 agente rende o ritmo cheio (~1000 XP/h); cada extra rende menos (½, ⅓, … — decaimento harmônico, anti-proliferação).
+- **Não acompanhado** (painel fechado): contabilizado na reabertura pelo delta do `state_change_seq` de cada agente, num ritmo menor.
 
-`idle` rende 0 XP (anti-cheat: o sinal de trabalho vem do Herdr, não de arquivo local editável). O nível (1–99) é **derivado** do XP total; cada nível custa `100 × nível` (acelerante); nível 99 ≈ 485.100 XP ≈ 1 ano de uso. Decisão: `docs/adr/0001-xp-from-real-agent-work.md`; linguagem: `CONTEXT.md`.
+`idle` rende 0 XP (anti-cheat: o sinal de trabalho vem do Herdr, não de arquivo local editável). O nível (1–99) é **derivado** do XP total; cada nível custa `100 × nível` (acelerante); nível 99 ≈ 485.100 XP ≈ 1 ano de uso. Decisões: `docs/adr/0001` e `0002`; linguagem: `CONTEXT.md`.
 
 ## Espelho do agente
 

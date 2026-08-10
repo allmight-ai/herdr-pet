@@ -5,10 +5,19 @@
 //! já chocados. A raridade não vive só no disco — é rederivável da âncora.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::progression::{level_for_xp, xp_for_catchup};
+use crate::progression::{harmonic_milli, level_for_xp, xp_for_catchup, MILLI};
+
+/// Sinal de trabalho de um agente: o `state_change_seq` observado num dado pane.
+/// Conceito do `CONTEXT.md` ("Sinal de trabalho"); é a chave do mapa `last_seq_by_pane`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaneSeq {
+    pub pane_id: String,
+    pub seq: u64,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct State {
@@ -19,9 +28,10 @@ pub struct State {
     /// XP total do pet ativo. Ausente em states antigos → default 0.
     #[serde(default)]
     pub xp: u64,
-    /// Último `state_change_seq` visto do agente (pro catch-up de trabalho não acompanhado).
+    /// Último `state_change_seq` visto por pane (catch-up de trabalho não acompanhado,
+    /// em qualquer projeto). Mapa pane_id → seq; ausente em states antigos → vazio.
     #[serde(default)]
-    pub last_state_change_seq: u64,
+    pub last_seq_by_pane: HashMap<String, u64>,
 }
 
 impl State {
@@ -33,7 +43,7 @@ impl State {
             active_index: 0,
             hatched: vec![0],
             xp: 0,
-            last_state_change_seq: 0,
+            last_seq_by_pane: HashMap::new(),
         }
     }
 
@@ -50,20 +60,55 @@ impl State {
         level_for_xp(self.xp)
     }
 
-    /// Contabiliza trabalho do agente observado enquanto o pane estava fechado.
-    /// Primeira observação (seq 0) trava a baseline sem creditar histórico;
-    /// nas seguintes, concede XP pelo delta (ritmo de catch-up) e avança o seq.
-    /// Devolve o XP ganho.
-    pub fn apply_catchup(&mut self, observed_seq: u64) -> u64 {
-        let gained = if self.last_state_change_seq == 0 {
-            0
+    /// Contabiliza trabalho de **todos** os agentes observados enquanto o pane esteve
+    /// fechado. `agents`: `(pane_id, seq observado)` de cada agente. Primeira vista de
+    /// um pane = baseline (sem creditar); nas seguintes, XP pelo delta. Vários agentes
+    /// avançando sofrem o decaimento harmônico (anti-proliferação). Devolve o XP ganho.
+    pub fn apply_catchup(&mut self, agents: &[PaneSeq]) -> u64 {
+        // Dedupe por pane (maior seq) — pane duplicado (ex.: pane_id ausente) não dobra a conta.
+        let mut latest: HashMap<&str, u64> = HashMap::new();
+        for ps in agents {
+            latest
+                .entry(&ps.pane_id)
+                .and_modify(|e| *e = (*e).max(ps.seq))
+                .or_insert(ps.seq);
+        }
+        // Ganhos contra o mapa como estava na entrada: um pane não enxerga o insert de outro.
+        let mut linear = 0u64;
+        let mut contributors = 0u64;
+        for (pane_id, observed) in &latest {
+            let gained = match self.last_seq_by_pane.get(*pane_id) {
+                Some(&last) => {
+                    let g = xp_for_catchup(observed.saturating_sub(last));
+                    if g > 0 {
+                        contributors += 1;
+                    }
+                    g
+                }
+                None => 0, // primeira vista do pane: baseline, sem creditar histórico
+            };
+            linear += gained;
+        }
+        for (pane_id, observed) in &latest {
+            self.last_seq_by_pane.insert((*pane_id).to_string(), *observed);
+        }
+        // Fator de largura harmonic_milli(N)/N: 1 agente = MILLI (cheio); mais = menos cada.
+        let factor = if contributors > 0 {
+            harmonic_milli(contributors as usize) / contributors
         } else {
-            let delta = observed_seq.saturating_sub(self.last_state_change_seq);
-            xp_for_catchup(delta)
+            0
         };
-        self.last_state_change_seq = observed_seq;
-        self.xp += gained;
-        gained
+        let granted = linear * factor / MILLI;
+        self.xp += granted;
+        granted
+    }
+
+    /// Trackeia o seq de cada agente **sem creditar XP** — usado no poll enquanto o pane
+    /// está aberto, pra o próximo catch-up contar só o período fechado (sem dupla contagem).
+    pub fn observe_seq(&mut self, agents: &[PaneSeq]) {
+        for ps in agents {
+            self.last_seq_by_pane.insert(ps.pane_id.clone(), ps.seq);
+        }
     }
 }
 
