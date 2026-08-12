@@ -143,18 +143,20 @@ pub fn focused_agent_status() -> Option<AgentStatus> {
     focused_agent_info().map(|i| i.status)
 }
 
-/// Display agregado pro loop `watch`: **(status, tarefa)** que o pet mostra.
+/// Display agregado pro loop `watch`: **(status, tarefas)** que o pet mostra.
 ///
-/// Se **qualquer** agente está `working`, o pet acorda (`Working`) e mostra a
-/// tarefa de quem trabalha — preferindo o agente focado se ele também trabalha
-/// (pet dockado numa sessão working), senão o primeiro `working`. Quando ninguém
-/// trabalha, espelha o agente focado (idle/blocked/done/unknown). Só `working`
-/// prevalece no agregado: é o sinal de trabalho que importa pro pet.
+/// Se **qualquer** agente está `working`, o pet acorda (`Working`) e a lista
+/// devolve as tarefas de todos os working — o focado-working primeiro (a rotação
+/// do `watch` começa por ele), depois os demais. Com vários working, o loop
+/// **rotaciona** entre essas tarefas. Quando ninguém trabalha, devolve a tarefa
+/// do agente focado (única) e espelha o status dele (idle/blocked/done/unknown).
+/// Títulos vazios são descartados.
 ///
-/// O "focado" segue a mesma prioridade de `focused_agent_info`: marcado `focused`
+/// Só `working` prevalece no agregado: é o sinal de trabalho que importa pro
+/// pet. O "focado" segue a prioridade de `focused_agent_info`: marcado `focused`
 /// → mesmo `HERDR_WORKSPACE_ID` → primeiro da lista. `agents` costuma vir de
 /// `all_agents_info` (um único `herdr agent list`).
-pub fn aggregate_display(agents: &[AgentInfo]) -> (AgentStatus, Option<String>) {
+pub fn aggregate_display(agents: &[AgentInfo]) -> (AgentStatus, Vec<String>) {
     let ws = std::env::var("HERDR_WORKSPACE_ID").ok();
     let focused = agents
         .iter()
@@ -162,17 +164,27 @@ pub fn aggregate_display(agents: &[AgentInfo]) -> (AgentStatus, Option<String>) 
         .or_else(|| agents.iter().find(|a| a.workspace_id.as_deref() == ws.as_deref()))
         .or_else(|| agents.first());
 
-    // Alguém working → pet acordado. Tarefa: a do focado se ele trabalha; senão a
-    // do primeiro working.
-    let chosen_worker = focused
-        .filter(|f| matches!(f.status, AgentStatus::Working))
-        .or_else(|| agents.iter().find(|a| matches!(a.status, AgentStatus::Working)));
-
-    match chosen_worker {
-        Some(w) => (AgentStatus::Working, w.title.clone()),
-        None => focused
-            .map(|f| (f.status, f.title.clone()))
-            .unwrap_or((AgentStatus::Idle, None)),
+    if agents
+        .iter()
+        .any(|a| matches!(a.status, AgentStatus::Working))
+    {
+        // Tarefas dos working, focado-working primeiro (sort estável preserva a
+        // ordem dos demais). O loop `watch` rotaciona entre elas.
+        let mut working: Vec<&AgentInfo> = agents
+            .iter()
+            .filter(|a| matches!(a.status, AgentStatus::Working))
+            .collect();
+        if let Some(f) = focused.filter(|f| matches!(f.status, AgentStatus::Working)) {
+            working.sort_by_key(|a| !std::ptr::eq(*a, f));
+        }
+        let titles = working.iter().filter_map(|a| a.title.clone()).collect();
+        (AgentStatus::Working, titles)
+    } else {
+        // Sem working → espelha o focado (tarefa única, se houver).
+        let titles = focused.and_then(|f| f.title.clone()).into_iter().collect();
+        focused
+            .map(|f| (f.status, titles))
+            .unwrap_or((AgentStatus::Idle, Vec::new()))
     }
 }
 
@@ -226,17 +238,17 @@ mod tests {
             ai(AgentStatus::Idle, Some("idle task"), true),
             ai(AgentStatus::Working, Some("refatorando auth"), false),
         ];
-        let (status, title) = aggregate_display(&agents);
+        let (status, titles) = aggregate_display(&agents);
         assert_eq!(status, AgentStatus::Working);
-        assert_eq!(title.as_deref(), Some("refatorando auth"));
+        assert_eq!(titles, vec!["refatorando auth"]);
     }
 
     #[test]
     fn aggrega_focado_working_mostra_tarefa_dele() {
         let agents = [ai(AgentStatus::Working, Some("minha task"), true)];
-        let (status, title) = aggregate_display(&agents);
+        let (status, titles) = aggregate_display(&agents);
         assert_eq!(status, AgentStatus::Working);
-        assert_eq!(title.as_deref(), Some("minha task"));
+        assert_eq!(titles, vec!["minha task"]);
     }
 
     #[test]
@@ -245,27 +257,40 @@ mod tests {
             ai(AgentStatus::Idle, Some("outra"), false),
             ai(AgentStatus::Idle, Some("focada"), true),
         ];
-        let (status, title) = aggregate_display(&agents);
+        let (status, titles) = aggregate_display(&agents);
         assert_eq!(status, AgentStatus::Idle);
-        assert_eq!(title.as_deref(), Some("focada"));
+        assert_eq!(titles, vec!["focada"]);
     }
 
     #[test]
     fn aggrega_sem_agentes_devolve_idle() {
-        let (status, title) = aggregate_display(&[]);
+        let (status, titles) = aggregate_display(&[]);
         assert_eq!(status, AgentStatus::Idle);
-        assert_eq!(title, None);
+        assert!(titles.is_empty());
     }
 
     #[test]
-    fn aggrega_multiplos_working_prefere_focado_working() {
-        // 2 working; o focado também é working → tarefa do focado.
+    fn aggrega_multiplos_working_focado_primeiro_depois_demais() {
+        // 2 working; o focado também é working → lista começa por ele, depois o outro.
         let agents = [
             ai(AgentStatus::Working, Some("outra working"), false),
             ai(AgentStatus::Working, Some("focada working"), true),
         ];
-        let (status, title) = aggregate_display(&agents);
+        let (status, titles) = aggregate_display(&agents);
         assert_eq!(status, AgentStatus::Working);
-        assert_eq!(title.as_deref(), Some("focada working"));
+        assert_eq!(titles, vec!["focada working", "outra working"]);
+    }
+
+    #[test]
+    fn aggrega_multiplos_working_focado_idle_lista_todos() {
+        // Pet dockado no idle; 2 outras working → acorda e lista as duas (rotação).
+        let agents = [
+            ai(AgentStatus::Idle, Some("dormindo"), true),
+            ai(AgentStatus::Working, Some("task B"), false),
+            ai(AgentStatus::Working, Some("task C"), false),
+        ];
+        let (status, titles) = aggregate_display(&agents);
+        assert_eq!(status, AgentStatus::Working);
+        assert_eq!(titles, vec!["task B", "task C"]);
     }
 }

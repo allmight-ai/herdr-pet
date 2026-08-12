@@ -110,7 +110,7 @@ Dali saem espécie, raridade (60 / 25 / 10 / 4 / 1), shiny (1/128), IVs e nome.
 O mesmo par `(github_id, índice)` sempre produz o mesmo pet.
 
 **Espelho.**  
-O `watch` agrega **todos** os agentes (`herdr agent list`) e mapeia o status: se qualquer um está `working`, o pet acorda (mostrando a tarefa de quem trabalha); caso contrário espelha o agente focado.
+O `watch` agrega **todos** os agentes (`herdr agent list`) e mapeia o status: se qualquer um está `working`, o pet acorda; caso contrário espelha o agente focado. Com vários `working` ao mesmo tempo, ele **rotaciona** entre as tarefas deles (~4 s cada). O rodapé mostra `⚙ N` (N agentes trabalhando).
 
 | `agent_status` | humor |
 | --- | --- |
@@ -215,7 +215,7 @@ That seed yields species, rarity (60 / 25 / 10 / 4 / 1), shiny (1/128), IVs, and
 The same `(github_id, index)` always produces the same pet.
 
 **Mirror.**  
-`watch` aggregates **all** agents (`herdr agent list`) and maps status to mood: if any is `working`, the pet wakes up (showing that agent's task); otherwise it mirrors the focused one. Detection uses Herdr’s Screen Manifest (Claude Code needs no extra config). The agent must run in a native Herdr pane — nested tmux breaks detection.
+`watch` aggregates **all** agents (`herdr agent list`) and maps status to mood: if any is `working`, the pet wakes up; otherwise it mirrors the focused one. With several `working` agents at once, it rotates through their tasks (~4 s each). The footer shows `⚙ N` (N agents working). Detection uses Herdr’s Screen Manifest (Claude Code needs no extra config). The agent must run in a native Herdr pane — nested tmux breaks detection.
 
 **Progression (XP & level).**  
 The pet earns XP only from **any agent's** real work — it counts all projects, not just the focused one. 1 working agent earns the full rate (~1000 XP/h); each extra agent earns less (½, ⅓, … — harmonic decay, anti-proliferação). With the pane closed, work is tallied on reopen via `state_change_seq` at a lower rate. `idle` earns nothing. Level (1–99) is derived from total XP — each level needs more than the last (`100 × level`); reaching 99 is a long-term goal (~1 year). See `CONTEXT.md` and `docs/adr/`.

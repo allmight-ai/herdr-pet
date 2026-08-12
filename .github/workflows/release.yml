@@ -1,0 +1,53 @@
+# Publica uma GitHub Release automaticamente no push de uma tag `v*`.
+# As notas vêm da seção correspondente do CHANGELOG.md (ex.: tag v0.2.0 → bloco [0.2.0]).
+# Se a seção não existir, cai pras notas automáticas geradas pelo GitHub.
+#
+# Fluxo local (helper): `./scripts/release.sh 0.3.0` faz bump + CHANGELOG + tag + push;
+# esta Action cuida do resto.
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Notas da release (a partir do CHANGELOG)
+        id: notes
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          ver="${TAG#v}"   # v0.2.0 -> 0.2.0
+          # Extrai o bloco da versão: entre "## [<ver>]" e o próximo "## [".
+          awk -v ver="$ver" '
+            $0 ~ "^## \\[" ver "\\]" {p=1; next}
+            /^## \[/                  {if (p) exit}
+            p                         {print}
+          ' CHANGELOG.md > /tmp/notes.md
+
+          if [ -s /tmp/notes.md ]; then
+            echo "generate=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "generate=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Cria a GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.notes.outputs.generate }}" = "true" ]; then
+            gh release create "$TAG" --title "$TAG" --generate-notes
+          else
+            gh release create "$TAG" --title "$TAG" --notes-file /tmp/notes.md
+          fi

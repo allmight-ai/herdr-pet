@@ -31,7 +31,7 @@ O pet ganha XP só com **trabalho real de qualquer agente** — conta todos os p
 
 ## Espelho do agente
 
-O `watch` agrega **todos** os agentes (`herdr agent list`) e anima o mood: se qualquer um está `working`, o pet acorda (mostrando a tarefa de quem trabalha); caso contrário espelha o agente focado.
+O `watch` agrega **todos** os agentes (`herdr agent list`) e anima o mood: se qualquer um está `working`, o pet acorda; caso contrário espelha o agente focado. Com vários `working`, rotaciona entre as tarefas deles (~4 s cada).
 
 | `agent_status` | mood |
 | --- | --- |
@@ -41,7 +41,7 @@ O `watch` agrega **todos** os agentes (`herdr agent list`) e anima o mood: se qu
 | `idle` | dormindo |
 | `unknown` | confuso |
 
-A tarefa exibida é o `terminal_title` do agente que trabalha (ou do focado, se ninguém trabalha). Detecção via Screen Manifest do Herdr; o agente precisa estar num pane nativo (sem tmux aninhado).
+A tarefa exibida é o `terminal_title` de um agente que trabalha (rotacionando entre eles se houver vários, ~4 s cada); ou do focado, se ninguém trabalha. Rodapé: `⚙ N` = N agentes working. Detecção via Screen Manifest do Herdr; o agente precisa estar num pane nativo (sem tmux aninhado).
 
 ## Deployment
 

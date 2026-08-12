@@ -134,7 +134,8 @@ fn main() {
 
             let mut frame = 0u32;
             let mut status = forced.unwrap_or(herdr_pet::AgentStatus::Idle);
-            let mut title: Option<String> = None;
+            // Tarefas a exibir: com vários working, o loop rotaciona entre elas.
+            let mut titles: Vec<String> = Vec::new();
             // nº de agentes trabalhando agora (multiplicador harmônico do XP live).
             let mut n_working: usize =
                 if matches!(status, herdr_pet::AgentStatus::Working) { 1 } else { 0 };
@@ -144,9 +145,9 @@ fn main() {
             // (com decaimento). Só sem --mood.
             if forced.is_none() {
                 let agents = all_agents_info();
-                let (s, t, working, pane_seqs) = agents_snapshot(&agents);
+                let (s, ts, working, pane_seqs) = agents_snapshot(&agents);
                 status = s;
-                title = t;
+                titles = ts;
                 n_working = working;
                 state.apply_catchup(&pane_seqs);
             }
@@ -159,6 +160,7 @@ fn main() {
             let mut last_save_frame = 0u32;
             let mut last_saved_xp = state.xp;
             const SAVE_EVERY_FRAMES: u32 = 36; // ~30s (ciclo ~0,8s)
+            const TITLE_ROTATION_FRAMES: u32 = 5; // ~4s por tarefa quando há vários working
 
             // sig = o que determina redraw. Inclui nível + XP p/ redesenhar ao subir.
             let mut last_sig: Option<(herdr_pet::AgentStatus, u32, Option<String>, u8, u64)> = None;
@@ -168,9 +170,9 @@ fn main() {
                 // nº working (XP live) e pares (pane,seq) pra trackear sem dupla contagem.
                 if forced.is_none() && frame % 3 == 0 {
                     let agents = all_agents_info();
-                    let (s, t, working, pane_seqs) = agents_snapshot(&agents);
+                    let (s, ts, working, pane_seqs) = agents_snapshot(&agents);
                     status = s;
-                    title = t;
+                    titles = ts;
                     n_working = working;
                     state.observe_seq(&pane_seqs); // trackeia sem creditar (o live cuida do acompanhado)
                 }
@@ -182,6 +184,15 @@ fn main() {
                 if mult > 0 {
                     state.xp += accrual.add_working(dt, mult);
                 }
+
+                // Tarefa exibida: com vários working, rotaciona entre elas (~4s cada);
+                // com 0/1, mostra a única (ou nenhuma).
+                let title: Option<String> = if titles.is_empty() {
+                    None
+                } else {
+                    let idx = ((frame / TITLE_ROTATION_FRAMES) as usize) % titles.len();
+                    Some(titles[idx].clone())
+                };
 
                 // Redraw só quando algo visível muda (status, fase da anim, tarefa, nível/XP).
                 let lv = level_view(state.xp);
@@ -196,7 +207,7 @@ fn main() {
                     println!();
                     if lv.xp_span > 0 {
                         println!(
-                            "{DIM}#{idx} · {BOLD}Nv {}{RESET}{DIM} · {RESET}{}{DIM} {}/{} XP · {}w{RESET}",
+                            "{DIM}#{idx} · {BOLD}Nv {}{RESET}{DIM} · {RESET}{}{DIM} {}/{} XP · ⚙ {}{RESET}",
                             lv.level,
                             bar(lv.xp_into as u16, lv.xp_span as u16, 10),
                             lv.xp_into,
@@ -205,7 +216,7 @@ fn main() {
                         );
                     } else {
                         println!(
-                            "{DIM}#{idx} · {BOLD}Nv 99 ★ máximo{RESET}{DIM} · {}w · Ctrl+C{RESET}",
+                            "{DIM}#{idx} · {BOLD}Nv 99 ★ máximo{RESET}{DIM} · ⚙ {} · Ctrl+C{RESET}",
                             n_working
                         );
                     }
@@ -454,11 +465,11 @@ fn agents_snapshot(
     agents: &[herdr_pet::AgentInfo],
 ) -> (
     herdr_pet::AgentStatus,
-    Option<String>,
+    Vec<String>,
     usize,
     Vec<herdr_pet::state::PaneSeq>,
 ) {
-    let (status, title) = herdr_pet::agent::aggregate_display(agents);
+    let (status, titles) = herdr_pet::agent::aggregate_display(agents);
     let working = agents
         .iter()
         .filter(|a| matches!(a.status, herdr_pet::AgentStatus::Working))
@@ -470,7 +481,7 @@ fn agents_snapshot(
             seq: a.state_change_seq,
         })
         .collect();
-    (status, title, working, pane_seqs)
+    (status, titles, working, pane_seqs)
 }
 
 /// **Toggle** do pet (pro hotkey): se já existe um pane do pet neste workspace, fecha;
