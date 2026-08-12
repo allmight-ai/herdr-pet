@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Mantém o binário do pet sincronizado com o fonte depois de um `git pull` (com
+# merge). Ativado via `git config core.hooksPath githooks`. Nunca falha o git.
+# Nota: pull fast-forward não dispara post-merge — rode `cargo build --release`
+# manualmente nesses casos (ou conte com o post-commit no próximo commit).
+set +e
+cd "$(git rev-parse --show-toplevel)" 2>/dev/null || exit 0
+if command -v cargo >/dev/null 2>&1; then
+  echo "herdr-pet: recompilando (cargo build --release)..." >&2
+  cargo build --release --quiet
+fi
+exit 0

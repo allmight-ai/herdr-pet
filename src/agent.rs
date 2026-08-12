@@ -143,6 +143,39 @@ pub fn focused_agent_status() -> Option<AgentStatus> {
     focused_agent_info().map(|i| i.status)
 }
 
+/// Display agregado pro loop `watch`: **(status, tarefa)** que o pet mostra.
+///
+/// Se **qualquer** agente está `working`, o pet acorda (`Working`) e mostra a
+/// tarefa de quem trabalha — preferindo o agente focado se ele também trabalha
+/// (pet dockado numa sessão working), senão o primeiro `working`. Quando ninguém
+/// trabalha, espelha o agente focado (idle/blocked/done/unknown). Só `working`
+/// prevalece no agregado: é o sinal de trabalho que importa pro pet.
+///
+/// O "focado" segue a mesma prioridade de `focused_agent_info`: marcado `focused`
+/// → mesmo `HERDR_WORKSPACE_ID` → primeiro da lista. `agents` costuma vir de
+/// `all_agents_info` (um único `herdr agent list`).
+pub fn aggregate_display(agents: &[AgentInfo]) -> (AgentStatus, Option<String>) {
+    let ws = std::env::var("HERDR_WORKSPACE_ID").ok();
+    let focused = agents
+        .iter()
+        .find(|a| a.focused)
+        .or_else(|| agents.iter().find(|a| a.workspace_id.as_deref() == ws.as_deref()))
+        .or_else(|| agents.first());
+
+    // Alguém working → pet acordado. Tarefa: a do focado se ele trabalha; senão a
+    // do primeiro working.
+    let chosen_worker = focused
+        .filter(|f| matches!(f.status, AgentStatus::Working))
+        .or_else(|| agents.iter().find(|a| matches!(a.status, AgentStatus::Working)));
+
+    match chosen_worker {
+        Some(w) => (AgentStatus::Working, w.title.clone()),
+        None => focused
+            .map(|f| (f.status, f.title.clone()))
+            .unwrap_or((AgentStatus::Idle, None)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -171,5 +204,68 @@ mod tests {
         let grok = env.result.agents.iter().find(|a| !a.focused).unwrap();
         assert_eq!(grok.state_change_seq, 0);
         assert_eq!(grok.pane_id, "");
+    }
+
+    // --- aggregate_display: o pet "vê todos" os agentes ---
+
+    fn ai(status: AgentStatus, title: Option<&str>, focused: bool) -> AgentInfo {
+        AgentInfo {
+            status,
+            title: title.map(|s| s.to_string()),
+            state_change_seq: 0,
+            pane_id: String::new(),
+            workspace_id: None,
+            focused,
+        }
+    }
+
+    #[test]
+    fn aggrega_working_de_outra_sessao_acorda_pet() {
+        // Pet dockado no idle (focado); outra sessão working → acorda com a tarefa dela.
+        let agents = [
+            ai(AgentStatus::Idle, Some("idle task"), true),
+            ai(AgentStatus::Working, Some("refatorando auth"), false),
+        ];
+        let (status, title) = aggregate_display(&agents);
+        assert_eq!(status, AgentStatus::Working);
+        assert_eq!(title.as_deref(), Some("refatorando auth"));
+    }
+
+    #[test]
+    fn aggrega_focado_working_mostra_tarefa_dele() {
+        let agents = [ai(AgentStatus::Working, Some("minha task"), true)];
+        let (status, title) = aggregate_display(&agents);
+        assert_eq!(status, AgentStatus::Working);
+        assert_eq!(title.as_deref(), Some("minha task"));
+    }
+
+    #[test]
+    fn aggrega_todos_idle_espelha_focado() {
+        let agents = [
+            ai(AgentStatus::Idle, Some("outra"), false),
+            ai(AgentStatus::Idle, Some("focada"), true),
+        ];
+        let (status, title) = aggregate_display(&agents);
+        assert_eq!(status, AgentStatus::Idle);
+        assert_eq!(title.as_deref(), Some("focada"));
+    }
+
+    #[test]
+    fn aggrega_sem_agentes_devolve_idle() {
+        let (status, title) = aggregate_display(&[]);
+        assert_eq!(status, AgentStatus::Idle);
+        assert_eq!(title, None);
+    }
+
+    #[test]
+    fn aggrega_multiplos_working_prefere_focado_working() {
+        // 2 working; o focado também é working → tarefa do focado.
+        let agents = [
+            ai(AgentStatus::Working, Some("outra working"), false),
+            ai(AgentStatus::Working, Some("focada working"), true),
+        ];
+        let (status, title) = aggregate_display(&agents);
+        assert_eq!(status, AgentStatus::Working);
+        assert_eq!(title.as_deref(), Some("focada working"));
     }
 }

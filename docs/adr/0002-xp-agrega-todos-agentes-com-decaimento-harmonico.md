@@ -6,4 +6,4 @@ O XP conta o trabalho de **todos** os agentes detectados (qualquer projeto), nã
 
 Agregamos todos (e não só o focado) porque o pet deve crescer com tudo que o programador faz, em qualquer projeto. O decaimento harmônico porque linear inflacionaria (e abriria brecha de proliferação de agentes); um cap duro tem cliff arbitrário; a harmônica é suave e mantém o caso comum — 1 agente — no ritmo cheio, sem penalidade.
 
-**Consequências:** o display (humor/tarefa) continua espelhando o agente **focado**; só o XP agrega todos. A curva é a defesa contra inflação por proliferação de agentes. Ver também `0001-xp-from-real-agent-work.md`.
+**Consequências:** só o XP agrega todos (com decaimento harmônico). *(Atualizado em 2026-08-12: o display agora agrega também — se qualquer agente está `working`, o pet acorda com a tarefa dele; só quando ninguém trabalha é que espelha o agente focado. Antes o display espelhava só o focado; ver `agent::aggregate_display`.)* A curva é a defesa contra inflação por proliferação de agentes. Ver também `0001-xp-from-real-agent-work.md`.

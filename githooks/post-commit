@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Mantém o binário do pet sincronizado com o fonte depois de cada commit.
+# Ativado via `git config core.hooksPath githooks` (hooks versionados, sem cópia
+# pra .git/hooks/). Nunca falha o git — o commit já foi feito; build quebrado é
+# problema separado (vai aparecer no próximo `cargo build` manual).
+set +e
+cd "$(git rev-parse --show-toplevel)" 2>/dev/null || exit 0
+if command -v cargo >/dev/null 2>&1; then
+  echo "herdr-pet: recompilando (cargo build --release)..." >&2
+  cargo build --release --quiet
+fi
+exit 0

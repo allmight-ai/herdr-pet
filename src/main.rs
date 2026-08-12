@@ -140,14 +140,13 @@ fn main() {
                 if matches!(status, herdr_pet::AgentStatus::Working) { 1 } else { 0 };
 
             // Catch-up na abertura: trabalho de TODOS os agentes enquanto o pane esteve
-            // fechado. Display espelha o focado; XP agrega todos (com decaimento). Só sem --mood.
+            // fechado. Display agrega todos (acorda se algum working); XP agrega todos
+            // (com decaimento). Só sem --mood.
             if forced.is_none() {
                 let agents = all_agents_info();
-                let (focused, working, pane_seqs) = agents_snapshot(&agents);
-                if let Some(f) = focused {
-                    status = f.status;
-                    title = f.title.clone();
-                }
+                let (s, t, working, pane_seqs) = agents_snapshot(&agents);
+                status = s;
+                title = t;
                 n_working = working;
                 state.apply_catchup(&pane_seqs);
             }
@@ -169,11 +168,9 @@ fn main() {
                 // nº working (XP live) e pares (pane,seq) pra trackear sem dupla contagem.
                 if forced.is_none() && frame % 3 == 0 {
                     let agents = all_agents_info();
-                    let (focused, working, pane_seqs) = agents_snapshot(&agents);
-                    if let Some(f) = focused {
-                        status = f.status;
-                        title = f.title.clone();
-                    }
+                    let (s, t, working, pane_seqs) = agents_snapshot(&agents);
+                    status = s;
+                    title = t;
                     n_working = working;
                     state.observe_seq(&pane_seqs); // trackeia sem creditar (o live cuida do acompanhado)
                 }
@@ -450,17 +447,18 @@ fn focused_workspace_id() -> Option<String> {
         .map(String::from)
 }
 
-/// Snapshot dos agentes detectados: focado (display), nº working (multiplicador do XP)
-/// e pares `(pane_id, seq)` pro catch-up/trackeio. Um único `herdr agent list` resolve tudo.
+/// Snapshot dos agentes detectados: **(status, tarefa)** do display agregado (vê todos —
+/// acorda se algum working, com a tarefa de quem trabalha), nº working (multiplicador do
+/// XP) e pares `(pane_id, seq)` pro catch-up/trackeio. Um único `herdr agent list` resolve tudo.
 fn agents_snapshot(
     agents: &[herdr_pet::AgentInfo],
-) -> (Option<&herdr_pet::AgentInfo>, usize, Vec<herdr_pet::state::PaneSeq>) {
-    let ws = std::env::var("HERDR_WORKSPACE_ID").ok();
-    let focused = agents
-        .iter()
-        .find(|a| a.focused)
-        .or_else(|| agents.iter().find(|a| a.workspace_id.as_deref() == ws.as_deref()))
-        .or_else(|| agents.first());
+) -> (
+    herdr_pet::AgentStatus,
+    Option<String>,
+    usize,
+    Vec<herdr_pet::state::PaneSeq>,
+) {
+    let (status, title) = herdr_pet::agent::aggregate_display(agents);
     let working = agents
         .iter()
         .filter(|a| matches!(a.status, herdr_pet::AgentStatus::Working))
@@ -472,7 +470,7 @@ fn agents_snapshot(
             seq: a.state_change_seq,
         })
         .collect();
-    (focused, working, pane_seqs)
+    (status, title, working, pane_seqs)
 }
 
 /// **Toggle** do pet (pro hotkey): se já existe um pane do pet neste workspace, fecha;

@@ -65,6 +65,13 @@ herdr plugin link .
 ./target/release/herdr-pet setup
 ```
 
+Após clonar, ative o rebuild automático do binário a cada commit/pull — assim o pet
+sempre roda o código mais novo (sem precisar lembrar de recompilar à mão):
+
+```bash
+git config core.hooksPath githooks   # hooks versionados: post-commit + post-merge
+```
+
 ## Uso
 
 ```bash
@@ -103,7 +110,7 @@ Dali saem espécie, raridade (60 / 25 / 10 / 4 / 1), shiny (1/128), IVs e nome.
 O mesmo par `(github_id, índice)` sempre produz o mesmo pet.
 
 **Espelho.**  
-O `watch` consulta o agente focado (`herdr agent list`) e mapeia o status:
+O `watch` agrega **todos** os agentes (`herdr agent list`) e mapeia o status: se qualquer um está `working`, o pet acorda (mostrando a tarefa de quem trabalha); caso contrário espelha o agente focado.
 
 | `agent_status` | humor |
 | --- | --- |
@@ -175,6 +182,13 @@ herdr plugin link .
 ./target/release/herdr-pet setup
 ```
 
+After cloning, enable automatic binary rebuild on every commit/pull — so the pet
+always runs the latest code (no need to remember to rebuild by hand):
+
+```bash
+git config core.hooksPath githooks   # versioned hooks: post-commit + post-merge
+```
+
 ### Usage
 
 ```bash
@@ -201,7 +215,7 @@ That seed yields species, rarity (60 / 25 / 10 / 4 / 1), shiny (1/128), IVs, and
 The same `(github_id, index)` always produces the same pet.
 
 **Mirror.**  
-`watch` polls the focused agent (`herdr agent list`) and maps status to mood. Detection uses Herdr’s Screen Manifest (Claude Code needs no extra config). The agent must run in a native Herdr pane — nested tmux breaks detection.
+`watch` aggregates **all** agents (`herdr agent list`) and maps status to mood: if any is `working`, the pet wakes up (showing that agent's task); otherwise it mirrors the focused one. Detection uses Herdr’s Screen Manifest (Claude Code needs no extra config). The agent must run in a native Herdr pane — nested tmux breaks detection.
 
 **Progression (XP & level).**  
 The pet earns XP only from **any agent's** real work — it counts all projects, not just the focused one. 1 working agent earns the full rate (~1000 XP/h); each extra agent earns less (½, ⅓, … — harmonic decay, anti-proliferação). With the pane closed, work is tallied on reopen via `state_change_seq` at a lower rate. `idle` earns nothing. Level (1–99) is derived from total XP — each level needs more than the last (`100 × level`); reaching 99 is a long-term goal (~1 year). See `CONTEXT.md` and `docs/adr/`.
