@@ -68,6 +68,13 @@ No push da tag, a GitHub Action (`.github/workflows/release.yml`) publica a Rele
 no GitHub **sozinha**, com as notas extraídas do `CHANGELOG.md`. Se a seção não
 existir, ela cai pras notas automáticas do GitHub.
 
+> **Pegadinha (caso raro):** o GitHub **não** roda um workflow no push que o **cria
+> ou modifica** quando esse push é autenticado por PAT/OAuth (proteção contra token
+> roubado criar CI). Então o push que introduz o `release.yml` pela primeira vez
+> **não** dispara a Action — a Release dessa tag precisa ser criada na mão (GitHub
+> UI → *Draft a new release*, ou via API). Releases seguintes disparam sozinhos,
+> porque o workflow já existe e o push da tag não o altera.
+
 > **Versionamento (SemVer, em `0.x`):** suba o **MINOR** (`0.2.0 → 0.3.0`) quando
 > adicionar feature; o **PATCH** (`0.2.0 → 0.2.1`) pra só correção de bug. Antes do
 > `1.0.0` a API pode mudar livremente — o MINOR é o sinal de "tem coisa nova".
