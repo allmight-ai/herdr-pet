@@ -103,9 +103,10 @@ impl State {
         granted
     }
 
-    /// Trackeia o seq de cada agente **sem creditar XP** — usado no poll enquanto o pane
-    /// está aberto, pra o próximo catch-up contar só o período fechado (sem dupla contagem).
-    pub fn observe_seq(&mut self, agents: &[PaneSeq]) {
+    /// Avança a baseline de cada agente **sem creditar XP** — usado no poll enquanto o
+    /// pane está aberto, pra o próximo catch-up contar só o período fechado (sem dupla
+    /// contagem). O nome carrega o invariante: só registra o que já vimos.
+    pub fn record_seen_seq(&mut self, agents: &[PaneSeq]) {
         for ps in agents {
             self.last_seq_by_pane.insert(ps.pane_id.clone(), ps.seq);
         }

@@ -29,9 +29,11 @@ O pet ganha XP só com **trabalho real de qualquer agente** — conta todos os p
 
 `idle` rende 0 XP (anti-cheat: o sinal de trabalho vem do Herdr, não de arquivo local editável). O nível (1–99) é **derivado** do XP total; cada nível custa `100 × nível` (acelerante); nível 99 ≈ 485.100 XP ≈ 1 ano de uso. Decisões: `docs/adr/0001` e `0002`; linguagem: `CONTEXT.md`.
 
+Ao fechar o pane (Ctrl+C ou toggle), o pet imprime um **resumo da sessão** — agentes que trabalharam, XP ganho (catch-up da abertura + trabalho acompanhado), nível (com seta se subiu) e duração. O quadro fica ~1,4 s na casinha: o toggle manda `ctrl+c` no PTY, espera a linha aparecer e só então destrói o pane. A mesma linha vai pra `herdr notification`.
+
 ## Espelho do agente
 
-O `watch` agrega **todos** os agentes (`herdr agent list`) e anima o mood: se qualquer um está `working`, o pet acorda; caso contrário espelha o agente focado. Com vários `working`, rotaciona entre as tarefas deles (~4 s cada).
+O `watch` agrega **todos** os agentes (`herdr agent list`) e anima o mood: se qualquer um está `working`, o pet acorda; caso contrário espelha o agente focado. Com vários `working`, rotaciona entre as tarefas deles (~4 s cada). Em panes Claude/GLM, também conta subagentes do time/Task que ainda estão rodando (o Herdr só vê o processo pai).
 
 | `agent_status` | mood |
 | --- | --- |

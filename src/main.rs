@@ -117,9 +117,9 @@ fn main() {
             use std::sync::atomic::{AtomicBool, Ordering};
             use std::sync::Arc;
             use std::time::Instant;
-            use herdr_pet::agent::all_agents_info;
             use herdr_pet::progression::{harmonic_milli, level_view, Accrual};
             use herdr_pet::render::{bar, BOLD, DIM, RESET};
+            use herdr_pet::session::Session;
 
             let running = Arc::new(AtomicBool::new(true));
             let r = running.clone();
@@ -140,16 +140,21 @@ fn main() {
             let mut n_working: usize =
                 if matches!(status, herdr_pet::AgentStatus::Working) { 1 } else { 0 };
 
+            // Sessão começa no XP/nível de disco — o catch-up entra no delta do resumo.
+            let mut session = Session::start(state.xp, state.level());
+            if matches!(status, herdr_pet::AgentStatus::Working) {
+                session.note_working(std::iter::empty::<&str>(), n_working);
+            }
+
             // Catch-up na abertura: trabalho de TODOS os agentes enquanto o pane esteve
             // fechado. Display agrega todos (acorda se algum working); XP agrega todos
             // (com decaimento). Só sem --mood.
             if forced.is_none() {
-                let agents = all_agents_info();
-                let (s, ts, working, pane_seqs) = agents_snapshot(&agents);
-                status = s;
-                titles = ts;
-                n_working = working;
-                state.apply_catchup(&pane_seqs);
+                let snap = refresh_agents(&mut state, SeqMode::Catchup);
+                status = snap.status;
+                titles = snap.titles;
+                n_working = snap.n_working;
+                session.note_working(&snap.working_panes, snap.n_working);
             }
 
             // Acumulador de XP por tempo de trabalho acompanhado (dt real).
@@ -169,12 +174,11 @@ fn main() {
                 // Poll a cada ~2,4s (3 frames): snapshot único — focado (display),
                 // nº working (XP live) e pares (pane,seq) pra trackear sem dupla contagem.
                 if forced.is_none() && frame % 3 == 0 {
-                    let agents = all_agents_info();
-                    let (s, ts, working, pane_seqs) = agents_snapshot(&agents);
-                    status = s;
-                    titles = ts;
-                    n_working = working;
-                    state.observe_seq(&pane_seqs); // trackeia sem creditar (o live cuida do acompanhado)
+                    let snap = refresh_agents(&mut state, SeqMode::Track);
+                    status = snap.status;
+                    titles = snap.titles;
+                    n_working = snap.n_working;
+                    session.note_working(&snap.working_panes, snap.n_working);
                 }
                 // XP live: ritmo base × H(n_working). Sem working → multiplicador 0 → nada.
                 let now = Instant::now();
@@ -245,12 +249,36 @@ fn main() {
                 frame = frame.wrapping_add(1);
             }
 
-            // Save final na saída (Ctrl+C) — não perde o progresso da sessão.
+            // Save final na saída (Ctrl+C / SIGHUP do toggle) — não perde o progresso.
             if persist && state.xp != last_saved_xp {
                 let _ = herdr_pet::state::save(&state);
             }
 
+            let summary = session.summarize(state.xp, state.level());
+            let line = summary.format_line();
+            notify_session(&line);
+
+            // Último quadro ainda na tela alternativa — o pane precisa estar vivo
+            // pra isso aparecer. O toggle manda Ctrl+C e só fecha depois.
+            let goodbye = if summary.xp_gained > 0 {
+                herdr_pet::AgentStatus::Done
+            } else {
+                status
+            };
+            print!("\x1b[H\x1b[J");
+            println!(
+                "{}",
+                herdr_pet::render::render_casinha(&pet, frame, goodbye, None)
+            );
+            println!();
+            println!("{BOLD}{line}{RESET}");
+            let _ = std::io::stdout().flush();
+            std::thread::sleep(std::time::Duration::from_millis(
+                herdr_pet::session::FAREWELL_MS,
+            ));
+
             print!("\x1b[?1049l"); // restaura o buffer principal
+            println!("{line}");
             let _ = std::io::stdout().flush();
         }
         Cmd::Setup { quiet } => match herdr_pet::setup::ensure_setup() {
@@ -458,30 +486,68 @@ fn focused_workspace_id() -> Option<String> {
         .map(String::from)
 }
 
-/// Snapshot dos agentes detectados: **(status, tarefa)** do display agregado (vê todos —
-/// acorda se algum working, com a tarefa de quem trabalha), nº working (multiplicador do
-/// XP) e pares `(pane_id, seq)` pro catch-up/trackeio. Um único `herdr agent list` resolve tudo.
-fn agents_snapshot(
-    agents: &[herdr_pet::AgentInfo],
-) -> (
-    herdr_pet::AgentStatus,
-    Vec<String>,
-    usize,
-    Vec<herdr_pet::state::PaneSeq>,
-) {
-    let (status, titles) = herdr_pet::agent::aggregate_display(agents);
-    let working = agents
-        .iter()
-        .filter(|a| matches!(a.status, herdr_pet::AgentStatus::Working))
-        .count();
-    let pane_seqs = agents
-        .iter()
-        .map(|a| herdr_pet::state::PaneSeq {
-            pane_id: a.pane_id.clone(),
-            seq: a.state_change_seq,
-        })
-        .collect();
-    (status, titles, working, pane_seqs)
+/// O que fazer com o seq no refresh: creditar catch-up (abertura) ou só avançar
+/// a baseline sem XP (poll ao vivo — o accrual cuida do acompanhado).
+enum SeqMode {
+    Catchup,
+    Track,
+}
+
+/// Um poll: `herdr agent list` → snapshot → aplica o seq no state. Catch-up e
+/// poll compartilham este caminho; só o último passo (creditar vs. baseline) muda.
+fn refresh_agents(state: &mut herdr_pet::state::State, mode: SeqMode) -> herdr_pet::AgentsSnapshot {
+    let snap = herdr_pet::agent::snapshot(&herdr_pet::agent::all_agents_info());
+    match mode {
+        SeqMode::Catchup => {
+            state.apply_catchup(&snap.pane_seqs);
+        }
+        SeqMode::Track => {
+            state.record_seen_seq(&snap.pane_seqs);
+        }
+    }
+    snap
+}
+
+/// Pede ao `watch` pra desenhar o resumo (Ctrl+C no PTY) e só destrói o pane
+/// depois que a linha aparece — senão o toggle mata o PTY antes do print.
+fn close_pet_with_farewell(bin: &str, pane: &str) {
+    let sent = std::process::Command::new(bin)
+        .args(["pane", "send-keys", pane, "ctrl+c"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    if sent {
+        let _ = std::process::Command::new(bin)
+            .args([
+                "pane",
+                "wait-output",
+                "--match",
+                herdr_pet::session::SUMMARY_NEEDLE,
+                "--source",
+                "visible",
+                "--timeout",
+                "2000",
+                pane,
+            ])
+            .output();
+        // Um pouco menos que o hold do watch: fecha ainda com o quadro na tela.
+        let hold = herdr_pet::session::FAREWELL_MS.saturating_sub(200);
+        std::thread::sleep(std::time::Duration::from_millis(hold));
+    }
+
+    let _ = std::process::Command::new(bin)
+        .args(["plugin", "pane", "close", pane])
+        .output();
+}
+
+/// Toast no Herdr (sobrevive ao fechar o pane via toggle). Falha em silêncio se
+/// o server não estiver no ar — a linha no terminal já saiu.
+fn notify_session(line: &str) {
+    let bin = herdr_bin();
+    let _ = std::process::Command::new(&bin)
+        .args(["notification", "show", line, "--sound", "done"])
+        .output();
 }
 
 /// **Toggle** do pet (pro hotkey): se já existe um pane do pet neste workspace, fecha;
@@ -491,11 +557,9 @@ fn open_pet_small() -> Result<(), String> {
     const PLUGIN_ID: &str = "allmight-ai.herdr-pet";
     let bin = herdr_bin();
 
-    // Toggle: pet já existe neste workspace → fecha.
+    // Toggle: pet já existe neste workspace → pede o resumo e só então fecha.
     if let Some(existing) = pet_pane_in_workspace()? {
-        let _ = std::process::Command::new(&bin)
-            .args(["plugin", "pane", "close", &existing])
-            .output();
+        close_pet_with_farewell(&bin, &existing);
         println!("✓ pet fechado ({existing}).");
         return Ok(());
     }
@@ -526,8 +590,8 @@ fn open_pet_small() -> Result<(), String> {
             _ => break,
         }
     }
-    for _ in 0..12 {
-        match resize_pet_height(&bin, &pet, "up", 0.02) {
+    for _ in 0..24 {
+        match resize_pet_height(&bin, &pet, "up", 0.04) {
             Some(h) if h < 16 => {}
             _ => break,
         }

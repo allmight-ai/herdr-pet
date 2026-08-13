@@ -108,3 +108,21 @@ fn apply_catchup_pane_duplicado_nao_gera_xp_fantasma() {
     // Só o maior delta (200−100) conta; o segundo registro não dobra nem vira fantasma.
     assert_eq!(gained, herdr_pet::progression::xp_for_catchup(100));
 }
+
+#[test]
+fn record_seen_seq_avanca_baseline_sem_creditar() {
+    let mut s = State::new(1);
+    s.xp = 100;
+    s.record_seen_seq(&[PaneSeq {
+        pane_id: "w1:p1".into(),
+        seq: 150,
+    }]);
+    assert_eq!(s.xp, 100, "record_seen_seq não credita XP");
+    assert_eq!(s.last_seq_by_pane.get("w1:p1"), Some(&150));
+    // catch-up seguinte só conta o delta depois da baseline
+    let gained = s.apply_catchup(&[PaneSeq {
+        pane_id: "w1:p1".into(),
+        seq: 160,
+    }]);
+    assert_eq!(gained, herdr_pet::progression::xp_for_catchup(10));
+}

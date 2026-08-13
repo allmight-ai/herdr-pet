@@ -6,6 +6,8 @@
 
 use serde::Deserialize;
 
+use crate::state::PaneSeq;
+
 /// Status do agente espelhado pelo pet (enum do Herdr).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentStatus {
@@ -76,6 +78,18 @@ struct AgentEntry {
     state_change_seq: u64,
     #[serde(default)]
     pane_id: String,
+    #[serde(default)]
+    agent: Option<String>,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    agent_session: Option<AgentSession>,
+}
+
+#[derive(Deserialize)]
+struct AgentSession {
+    #[serde(default)]
+    value: Option<String>,
 }
 
 /// Info do agente que o pet acompanha: status + tarefa + seq (pro catch-up) +
@@ -88,6 +102,11 @@ pub struct AgentInfo {
     pub pane_id: String,
     pub workspace_id: Option<String>,
     pub focused: bool,
+    /// Rótulo do Herdr (`claude`, `grok`, `glm`, …). Subagentes Claude herdam o do pai.
+    pub agent: Option<String>,
+    pub cwd: Option<String>,
+    /// ID da sessão Claude (`agent_session.value`) — chave da pasta `subagents/`.
+    pub session_id: Option<String>,
 }
 
 /// Lê **todos** os agentes detectados do Herdr (vazio se a leitura falhar).
@@ -114,12 +133,17 @@ fn entry_to_info(a: &AgentEntry) -> AgentInfo {
         pane_id: a.pane_id.clone(),
         workspace_id: a.workspace_id.clone(),
         focused: a.focused,
+        agent: a.agent.clone(),
+        cwd: a.cwd.clone(),
+        session_id: a.agent_session.as_ref().and_then(|s| s.value.clone()),
     }
 }
 
 /// Info de **todos** os agentes detectados — pra agregar trabalho (XP) em todos os projetos.
+/// Claude/GLM ganham os subagentes ainda rodando (o Herdr só lista o processo pai).
 pub fn all_agents_info() -> Vec<AgentInfo> {
-    list_entries().iter().map(entry_to_info).collect()
+    let agents: Vec<AgentInfo> = list_entries().iter().map(entry_to_info).collect();
+    crate::claude::expand_subagents(&agents)
 }
 
 /// Agente que o pet deve espelhar (display): o **focado**; senão o do mesmo workspace;
@@ -188,6 +212,43 @@ pub fn aggregate_display(agents: &[AgentInfo]) -> (AgentStatus, Vec<String>) {
     }
 }
 
+/// Snapshot de um `herdr agent list`: display agregado, nº working (ritmo do XP),
+/// pares `(pane, seq)` (catch-up / baseline) e panes que estão `working` agora
+/// (resumo da sessão). Um único poll resolve tudo.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentsSnapshot {
+    pub status: AgentStatus,
+    pub titles: Vec<String>,
+    pub n_working: usize,
+    pub pane_seqs: Vec<PaneSeq>,
+    pub working_panes: Vec<String>,
+}
+
+/// Constrói o snapshot a partir da lista já lida (sem novo `herdr agent list`).
+pub fn snapshot(agents: &[AgentInfo]) -> AgentsSnapshot {
+    let (status, titles) = aggregate_display(agents);
+    let working: Vec<&AgentInfo> = agents
+        .iter()
+        .filter(|a| matches!(a.status, AgentStatus::Working))
+        .collect();
+    let n_working = working.len();
+    let working_panes = working.iter().map(|a| a.pane_id.clone()).collect();
+    let pane_seqs = agents
+        .iter()
+        .map(|a| PaneSeq {
+            pane_id: a.pane_id.clone(),
+            seq: a.state_change_seq,
+        })
+        .collect();
+    AgentsSnapshot {
+        status,
+        titles,
+        n_working,
+        pane_seqs,
+        working_panes,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -205,13 +266,17 @@ mod tests {
     fn picks_focused_agent_from_envelope() {
         let raw = r#"{"id":"cli:agent:list","result":{"agents":[
             {"agent":"grok","agent_status":"idle","focused":false,"workspace_id":"w18"},
-            {"agent":"claude","agent_status":"working","focused":true,"workspace_id":"w19","state_change_seq":48,"pane_id":"w19:pB"}
+            {"agent":"claude","agent_status":"working","focused":true,"workspace_id":"w19","state_change_seq":48,"pane_id":"w19:pB","cwd":"/tmp/p","agent_session":{"agent":"claude","kind":"id","source":"herdr:claude","value":"sess-1"}}
         ],"type":"agent_list"}}"#;
         let env: Envelope = serde_json::from_str(raw).unwrap();
         let pick = env.result.agents.iter().find(|a| a.focused).unwrap();
         assert_eq!(AgentStatus::from_herdr(&pick.agent_status), AgentStatus::Working);
         assert_eq!(pick.state_change_seq, 48);
         assert_eq!(pick.pane_id, "w19:pB");
+        let info = entry_to_info(pick);
+        assert_eq!(info.agent.as_deref(), Some("claude"));
+        assert_eq!(info.session_id.as_deref(), Some("sess-1"));
+        assert_eq!(info.cwd.as_deref(), Some("/tmp/p"));
         // ausente → default (0 seq, "" pane_id)
         let grok = env.result.agents.iter().find(|a| !a.focused).unwrap();
         assert_eq!(grok.state_change_seq, 0);
@@ -221,13 +286,26 @@ mod tests {
     // --- aggregate_display: o pet "vê todos" os agentes ---
 
     fn ai(status: AgentStatus, title: Option<&str>, focused: bool) -> AgentInfo {
+        ai_pane(status, title, focused, "", 0)
+    }
+
+    fn ai_pane(
+        status: AgentStatus,
+        title: Option<&str>,
+        focused: bool,
+        pane_id: &str,
+        seq: u64,
+    ) -> AgentInfo {
         AgentInfo {
             status,
             title: title.map(|s| s.to_string()),
-            state_change_seq: 0,
-            pane_id: String::new(),
+            state_change_seq: seq,
+            pane_id: pane_id.to_string(),
             workspace_id: None,
             focused,
+            agent: None,
+            cwd: None,
+            session_id: None,
         }
     }
 
@@ -292,5 +370,21 @@ mod tests {
         let (status, titles) = aggregate_display(&agents);
         assert_eq!(status, AgentStatus::Working);
         assert_eq!(titles, vec!["task B", "task C"]);
+    }
+
+    #[test]
+    fn snapshot_agrega_display_e_panes_working() {
+        let agents = [
+            ai_pane(AgentStatus::Idle, Some("dormindo"), true, "w1:pA", 10),
+            ai_pane(AgentStatus::Working, Some("task B"), false, "w2:pB", 20),
+            ai_pane(AgentStatus::Working, Some("task C"), false, "w3:pC", 30),
+        ];
+        let snap = snapshot(&agents);
+        assert_eq!(snap.status, AgentStatus::Working);
+        assert_eq!(snap.titles, vec!["task B", "task C"]);
+        assert_eq!(snap.n_working, 2);
+        assert_eq!(snap.working_panes, vec!["w2:pB", "w3:pC"]);
+        assert_eq!(snap.pane_seqs.len(), 3);
+        assert_eq!(snap.pane_seqs[1].seq, 20);
     }
 }

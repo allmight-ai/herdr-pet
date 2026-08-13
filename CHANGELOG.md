@@ -4,6 +4,18 @@ Todas as mudanças notáveis deste projeto serão documentadas aqui.
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/)
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [Unreleased]
+
+### Added
+- **Subagentes do Claude Code** (e GLM): time/Task ainda rodando entra no `⚙ N`,
+  na rotação de tarefas e no XP. O Herdr só lista o processo pai; cada subagente
+  ativo conta como outro.
+- **Resumo da sessão** ao fechar o pet (Ctrl+C ou toggle): agentes que trabalharam,
+  XP ganho (incluindo catch-up da abertura), nível e duração. Ex.:
+  `🐾 Sessão: 2 agentes · +1.240 XP · Nv 6 → 7 · 47 min`. A linha fica ~1,4 s na
+  casinha (o toggle espera o quadro antes de destruir o pane) e também vai pra
+  `herdr notification`.
+
 ## [0.2.0] - 2026-08-12
 
 ### Added

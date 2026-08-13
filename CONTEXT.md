@@ -21,7 +21,7 @@ _Avoid_: stats forjados, poder do gene
 ### Quem o pet observa
 
 **Agente**:
-O assistente de código (Claude Code, etc.) cujo trabalho o pet acompanha. Status: `working`, `done`, `blocked`, `idle`, `unknown`.
+O assistente de código (Claude Code, etc.) cujo trabalho o pet acompanha. Status: `working`, `done`, `blocked`, `idle`, `unknown`. Inclui o processo que o Herdr detecta **e** subagentes do Claude/GLM ainda rodando (time/Task), que o Herdr não lista.
 _Avoid_: modelo, LLM
 
 ### Progressão
@@ -49,3 +49,7 @@ _Avoid_: bônus por agente, multiplicador linear
 **Sinal de trabalho**:
 O indicador, lido do Herdr, de que o agente de fato trabalhou: o status `working` e o contador `state_change_seq`. Não editável localmente — base do anti-cheat.
 _Avoid_: contador de tempo, heartbeat
+
+**Sessão**:
+O período em que o pane do pet ficou aberto. Ao fechar (Ctrl+C ou toggle), o pet mostra um resumo: agentes que trabalharam, XP ganho (incluindo catch-up da abertura), nível e duração.
+_Avoid_: run, playthrough

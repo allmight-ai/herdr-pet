@@ -27,6 +27,7 @@ A espécie, a raridade, o nome e os stats vêm do seu ID do GitHub. Apagar o sta
 - Mostra a tarefa atual do agente (`terminal_title`)
 - Forja espécie, raridade, shiny, nome e stats a partir do GitHub
 - Ganha XP e sobe de nível com o trabalho real do agente (curva até o nível 99)
+- Ao fechar, mostra um resumo da sessão (agentes, XP, nível, duração)
 - Abre e fecha sob demanda com `prefix+a` em qualquer workspace
 - Atalho e CLI no PATH configurados **automaticamente** no install
 - Só consome recurso enquanto o painel está aberto
@@ -110,7 +111,7 @@ Dali saem espécie, raridade (60 / 25 / 10 / 4 / 1), shiny (1/128), IVs e nome.
 O mesmo par `(github_id, índice)` sempre produz o mesmo pet.
 
 **Espelho.**  
-O `watch` agrega **todos** os agentes (`herdr agent list`) e mapeia o status: se qualquer um está `working`, o pet acorda; caso contrário espelha o agente focado. Com vários `working` ao mesmo tempo, ele **rotaciona** entre as tarefas deles (~4 s cada). O rodapé mostra `⚙ N` (N agentes trabalhando).
+O `watch` agrega **todos** os agentes (`herdr agent list`) e mapeia o status: se qualquer um está `working`, o pet acorda; caso contrário espelha o agente focado. Com vários `working` ao mesmo tempo, ele **rotaciona** entre as tarefas deles (~4 s cada). Em Claude/GLM, também conta os subagentes do time/Task que ainda estão rodando. O rodapé mostra `⚙ N` (N agentes trabalhando).
 
 | `agent_status` | humor |
 | --- | --- |
@@ -123,7 +124,7 @@ O `watch` agrega **todos** os agentes (`herdr agent list`) e mapeia o status: se
 A detecção usa o Screen Manifest do Herdr (Claude Code sem configuração extra). O agente precisa estar num painel nativo do Herdr — tmux aninhado quebra a leitura.
 
 **Progressão (XP e nível).**  
-O pet ganha XP só com trabalho **real de qualquer agente** — conta todos os projetos, não só o focado. 1 agente `working` rende o ritmo cheio (~1000 XP/h); cada agente extra rende menos (½, ⅓, … — decaimento harmônico, anti-proliferação). Com o painel fechado, o trabalho é contabilizado na reabertura pelo `state_change_seq`, num ritmo menor. `idle` não rende XP. O nível (1–99) é derivado do XP total — cada nível pede mais que o anterior (`100 × nível`); chegar ao 99 é meta de longo prazo (~1 ano). Ver `CONTEXT.md` e `docs/adr/`.
+O pet ganha XP só com trabalho **real de qualquer agente** — conta todos os projetos, não só o focado. 1 agente `working` rende o ritmo cheio (~1000 XP/h); cada agente extra rende menos (½, ⅓, … — decaimento harmônico, anti-proliferação). Com o painel fechado, o trabalho é contabilizado na reabertura pelo `state_change_seq`, num ritmo menor. `idle` não rende XP. O nível (1–99) é derivado do XP total — cada nível pede mais que o anterior (`100 × nível`); chegar ao 99 é meta de longo prazo (~1 ano). Ao fechar o pane, um resumo da sessão mostra agentes, XP ganho, nível e duração. Ver `CONTEXT.md` e `docs/adr/`.
 
 **State.**  
 Âncora e índice ativo ficam em `HERDR_PLUGIN_STATE_DIR` (no Herdr) ou em `.herdr-pet-state/` (dev).  
@@ -151,6 +152,7 @@ Species, rarity, name, and stats come from your GitHub ID. Wipe the state and ru
 - Shows the agent’s current task (`terminal_title`)
 - Forges species, rarity, shiny, name, and stats from GitHub
 - Earns XP and levels up from the agent's real work (curve up to level 99)
+- On close, shows a session summary (agents, XP, level, duration)
 - Toggles on demand with `prefix+a` in any workspace
 - **Hotkey + CLI PATH are configured automatically on install**
 - Runs only while the pane is open
@@ -215,10 +217,10 @@ That seed yields species, rarity (60 / 25 / 10 / 4 / 1), shiny (1/128), IVs, and
 The same `(github_id, index)` always produces the same pet.
 
 **Mirror.**  
-`watch` aggregates **all** agents (`herdr agent list`) and maps status to mood: if any is `working`, the pet wakes up; otherwise it mirrors the focused one. With several `working` agents at once, it rotates through their tasks (~4 s each). The footer shows `⚙ N` (N agents working). Detection uses Herdr’s Screen Manifest (Claude Code needs no extra config). The agent must run in a native Herdr pane — nested tmux breaks detection.
+`watch` aggregates **all** agents (`herdr agent list`) and maps status to mood: if any is `working`, the pet wakes up; otherwise it mirrors the focused one. With several `working` agents at once, it rotates through their tasks (~4 s each). On Claude/GLM panes it also counts still-running team/Task subagents (Herdr only sees the parent process). The footer shows `⚙ N` (N agents working). Detection uses Herdr’s Screen Manifest (Claude Code needs no extra config). The agent must run in a native Herdr pane — nested tmux breaks detection.
 
 **Progression (XP & level).**  
-The pet earns XP only from **any agent's** real work — it counts all projects, not just the focused one. 1 working agent earns the full rate (~1000 XP/h); each extra agent earns less (½, ⅓, … — harmonic decay, anti-proliferação). With the pane closed, work is tallied on reopen via `state_change_seq` at a lower rate. `idle` earns nothing. Level (1–99) is derived from total XP — each level needs more than the last (`100 × level`); reaching 99 is a long-term goal (~1 year). See `CONTEXT.md` and `docs/adr/`.
+The pet earns XP only from **any agent's** real work — it counts all projects, not just the focused one. 1 working agent earns the full rate (~1000 XP/h); each extra agent earns less (½, ⅓, … — harmonic decay, anti-proliferation). With the pane closed, work is tallied on reopen via `state_change_seq` at a lower rate. `idle` earns nothing. Level (1–99) is derived from total XP — each level needs more than the last (`100 × level`); reaching 99 is a long-term goal (~1 year). Closing the pane prints a session summary (agents, XP gained, level, duration). See `CONTEXT.md` and `docs/adr/`.
 
 **State.**  
 Anchor and active index live under `HERDR_PLUGIN_STATE_DIR` (Herdr) or `.herdr-pet-state/` (dev).  
