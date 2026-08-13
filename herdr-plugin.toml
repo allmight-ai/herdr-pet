@@ -1,6 +1,6 @@
 id = "allmight-ai.herdr-pet"
 name = "Herdr Pet"
-version = "0.2.0"
+version = "0.3.0"
 min_herdr_version = "0.7.4"
 description = "Companion V-Pet — espelha o status e a tarefa do seu agente de código."
 platforms = ["linux", "macos"]

@@ -4,7 +4,7 @@ Todas as mudanças notáveis deste projeto serão documentadas aqui.
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/)
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
-## [Unreleased]
+## [0.3.0] - 2026-08-13
 
 ### Added
 - **Subagentes do Claude Code** (e GLM): time/Task ainda rodando entra no `⚙ N`,
@@ -51,5 +51,6 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 - Render ANSI otimizado: pet cacheado por `(github_id, índice)` e redraw só quando algo
   visível muda.
 
+[0.3.0]: https://github.com/allmight-ai/herdr-pet/releases/tag/v0.3.0
 [0.2.0]: https://github.com/allmight-ai/herdr-pet/releases/tag/v0.2.0
 [0.1.0]: https://github.com/allmight-ai/herdr-pet/releases/tag/v0.1.0
