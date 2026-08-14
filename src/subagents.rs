@@ -217,7 +217,7 @@ struct GrokMeta {
 ///    `active_sessions.json` sobrevive a SIGKILL e o `meta.json` fica
 ///    `running` pra sempre; fallback por cwd adotaria o fantasma.
 /// 3. `HERDR_PANE_ID` do pid vivo (`/proc/{pid}/environ` no Linux; `ps eww -p`
-///    no macOS). Resultado cacheado (env não muda). Se o pane **resolveu**
+///    no macOS). Cache por `session_id` (pid recicla). Se o pane **resolveu**
 ///    e não casa com nenhum grok da lista → **descarta** a sessão.
 /// 4. Sem chave (pid 0 / vivo sem `HERDR_PANE_ID`): fallback por cwd **só**
 ///    se existe exatamente 1 grok working naquele cwd e nenhum idle.
@@ -278,7 +278,7 @@ fn owner_for_grok_session<'a>(
         return Some(*p);
     }
     // Pane resolveu → casa ou descarta. Não cai no cwd (pid reciclado).
-    if let Some(pane) = herdr_pane_id_for_pid(session.pid) {
+    if let Some(pane) = herdr_pane_id_for_session(&session.session_id, session.pid) {
         return grok.iter().find(|a| a.pane_id == pane).copied();
     }
     cwd_unambiguous_working(session, grok, working)
@@ -294,8 +294,8 @@ fn pid_is_alive(pid: u32) -> bool {
     }
     std::process::Command::new("kill")
         .args(["-0", &pid.to_string()])
-        .status()
-        .map(|s| s.success())
+        .output()
+        .map(|o| o.status.success())
         .unwrap_or(false)
 }
 
@@ -322,14 +322,15 @@ fn cwd_unambiguous_working<'a>(
     None
 }
 
-/// `pid` → `HERDR_PANE_ID` (ou ausência). Env de processo não muda: acerto
-/// e erro cacheiam pra sempre. Só consultamos pid **vivo** (stale cai antes);
-/// um vivo sem a variável não ganha ela depois — recachear None só
-/// reforkaria `ps` a cada poll no macOS. Sem libc no crate.
-static PANE_BY_PID: OnceLock<Mutex<HashMap<u32, Option<String>>>> = OnceLock::new();
+/// `session_id` → `HERDR_PANE_ID` (ou ausência). Chave é a sessão, não o pid:
+/// pid recicla (grok A morre, grok B nasce com o mesmo número) e o cache
+/// por pid devolveria o pane velho. `session_id` do `GrokActive` é estável.
+/// Acerto e `None` cacheiam pra sempre — env daquela sessão não muda;
+/// recachear `None` reforkaria `ps` a cada poll no macOS.
+static PANE_BY_SESSION: OnceLock<Mutex<HashMap<String, Option<String>>>> = OnceLock::new();
 
-fn pane_cache() -> std::sync::MutexGuard<'static, HashMap<u32, Option<String>>> {
-    PANE_BY_PID
+fn pane_cache() -> std::sync::MutexGuard<'static, HashMap<String, Option<String>>> {
+    PANE_BY_SESSION
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -337,15 +338,15 @@ fn pane_cache() -> std::sync::MutexGuard<'static, HashMap<u32, Option<String>>> 
 
 /// `HERDR_PANE_ID` do processo Grok (Herdr injeta no PTY).
 /// Linux: `/proc/{pid}/environ`. macOS (e fallback): `ps eww -p <pid>`.
-fn herdr_pane_id_for_pid(pid: u32) -> Option<String> {
-    if pid == 0 {
+fn herdr_pane_id_for_session(session_id: &str, pid: u32) -> Option<String> {
+    if pid == 0 || session_id.is_empty() {
         return None;
     }
-    if let Some(hit) = pane_cache().get(&pid) {
+    if let Some(hit) = pane_cache().get(session_id) {
         return hit.clone();
     }
     let found = herdr_pane_id_from_proc(pid).or_else(|| herdr_pane_id_from_ps(pid));
-    pane_cache().insert(pid, found.clone());
+    pane_cache().insert(session_id.to_string(), found.clone());
     found
 }
 
