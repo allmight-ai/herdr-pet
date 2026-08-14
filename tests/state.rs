@@ -215,3 +215,40 @@ fn apply_catchup_reset_genuino_rebobina_sem_creditar_nesse_tick() {
     assert_eq!(gained, herdr_pet::progression::xp_for_catchup(40));
     assert_eq!(s.last_seq_by_pane.get("p"), Some(&40));
 }
+
+// --- C9: corrupção preservada, save atômico ---
+
+#[test]
+fn state_truncado_vira_none_e_preserva_corrupt() {
+    // Ilegível ⇒ None (auto-init pode recriar), MAS o conteúdo é preservado em
+    // `<path>.corrupt` antes de qualquer coisa — nunca destruído em silêncio.
+    let path = tmp("corrupt");
+    let original = r#"{"anchor":"github:1","github_id":1,"active_index":0,"hatched":[0],"xp":48000,"last"#;
+    std::fs::write(&path, original).unwrap();
+    assert!(load_from(&path).is_none());
+    let corrupt = PathBuf::from(format!("{}.corrupt", path.display()));
+    assert!(corrupt.is_file(), "cópia .corrupt criada");
+    assert_eq!(
+        std::fs::read_to_string(&corrupt).unwrap(),
+        original,
+        "cópia .corrupt com o conteúdo original"
+    );
+    // Segunda carga do mesmo arquivo ilegível: empilha (.corrupt.1), não sobrescreve.
+    assert!(load_from(&path).is_none());
+    let second = PathBuf::from(format!("{}.corrupt.1", path.display()));
+    assert!(second.is_file(), "segunda preserva empilha sem sobrescrever");
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&corrupt);
+    let _ = std::fs::remove_file(&second);
+}
+
+#[test]
+fn save_to_nao_deixa_tmp_e_produz_arquivo_valido() {
+    // Atômico (tmp+fsync+rename): depois do save não sobra tmp e o arquivo carrega.
+    let path = tmp("atomic");
+    let s = State::new(3);
+    save_to(&path, &s).unwrap();
+    assert!(!path.with_extension("tmp-herdr-pet").exists(), "sem tmp lixo");
+    assert_eq!(load_from(&path).unwrap().github_id, 3);
+    let _ = std::fs::remove_file(&path);
+}
