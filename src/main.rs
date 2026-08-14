@@ -212,6 +212,9 @@ fn main() {
                     status = snap.status;
                     titles = snap.titles;
                     n_working = snap.n_working;
+                    // Labels também: o rodapé `⚙ N nomes` é o conjunto ATUAL —
+                    // sem isso o badge misturava N novo com nomes da abertura.
+                    working_labels = snap.working_labels;
                     session.note_working(&snap.working_panes, snap.n_working);
                 }
                 // XP live: ritmo base × H(n_working). Sem working → multiplicador 0 → nada.
@@ -529,12 +532,10 @@ fn resize_pet_height(bin: &str, pet: &str, dir: &str, amount: f64) -> Option<u64
         .and_then(|p| p["rect"]["height"].as_u64())
 }
 
-/// Acha o pane do pet (label "Pet") no workspace do pane focado, se existir.
-fn pet_pane_in_workspace() -> Result<Option<String>, String> {
+/// Acha os panes do pet (label "Pet") em QUALQUER workspace — devolve
+/// `(pane_id, workspace_id)` de cada um que existir.
+fn pet_panes() -> Result<Vec<(String, Option<String>)>, String> {
     let bin = herdr_bin();
-    // Prefer API focus (hotkey/action context) over HERDR_WORKSPACE_ID — the env
-    // can lag when `herdr-pet open` is called from another pane/workspace.
-    let ws = focused_workspace_id().or_else(|| std::env::var("HERDR_WORKSPACE_ID").ok());
     let out = std::process::Command::new(&bin)
         .args(["pane", "list"])
         .output()
@@ -542,17 +543,18 @@ fn pet_pane_in_workspace() -> Result<Option<String>, String> {
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_default();
     Ok(v["result"]["panes"]
         .as_array()
-        .and_then(|a| {
+        .map(|a| {
             a.iter()
-                .find(|p| {
-                    p.get("label").and_then(|l| l.as_str()) == Some("Pet")
-                        && match ws.as_deref() {
-                            Some(ws) => p.get("workspace_id").and_then(|w| w.as_str()) == Some(ws),
-                            None => true,
-                        }
+                .filter(|p| p.get("label").and_then(|l| l.as_str()) == Some("Pet"))
+                .filter_map(|p| {
+                    let pane_id = p["pane_id"].as_str()?.to_string();
+                    let ws =
+                        p.get("workspace_id").and_then(|w| w.as_str()).map(String::from);
+                    Some((pane_id, ws))
                 })
-                .and_then(|p| p["pane_id"].as_str().map(String::from))
-        }))
+                .collect()
+        })
+        .unwrap_or_default())
 }
 
 fn focused_workspace_id() -> Option<String> {
@@ -631,18 +633,50 @@ fn notify_session(line: &str) {
         .output();
 }
 
-/// **Toggle** do pet (pro hotkey): se já existe um pane do pet neste workspace, fecha;
-/// senão abre como split pequeno dockado (~16 linhas) e refoca o pane original.
+/// **Toggle/move** do pet (pro hotkey). Regra: NUNCA dois panes Pet ao mesmo
+/// tempo — dois `watch` carregam cópias próprias do state e salvam o arquivo
+/// inteiro por cima um do outro (last-writer-wins perde XP e regredi as
+/// baselines de seq, que o próximo catch-up repaga). Então:
+/// - pet aberto NO workspace focado → fecha (toggle de sempre);
+/// - pet aberto em OUTRO workspace → fecha lá (com farewell) e reabre aqui:
+///   "move" — o pet acompanha o usuário pra onde ele foi trabalhar.
 /// Leve — o `watch` só roda enquanto aberto.
 fn open_pet_small() -> Result<(), String> {
     const PLUGIN_ID: &str = "allmight-ai.herdr-pet";
     let bin = herdr_bin();
 
-    // Toggle: pet já existe neste workspace → pede o resumo e só então fecha.
-    if let Some(existing) = pet_pane_in_workspace()? {
-        close_pet_with_farewell(&bin, &existing);
-        println!("✓ pet fechado ({existing}).");
-        return Ok(());
+    // Prefer API focus (hotkey/action context) over HERDR_WORKSPACE_ID — the env
+    // can lag when `herdr-pet open` is called from another pane/workspace.
+    let here = focused_workspace_id().or_else(|| std::env::var("HERDR_WORKSPACE_ID").ok());
+    let pets = pet_panes()?;
+
+    if !pets.is_empty() {
+        // Pet no workspace atual (ou workspace indeterminável de qualquer lado —
+        // sem como afirmar que é "outro") → comporta como toggle: fecha e pronto.
+        // Só decide "move" quando ambos os lados são conhecidos e diferentes.
+        let in_this_ws = pets.iter().any(|(_, ws)| match (&here, ws) {
+            (Some(h), Some(w)) => h == w,
+            _ => true,
+        });
+        for (existing, _) in &pets {
+            close_pet_with_farewell(&bin, existing);
+        }
+        if in_this_ws {
+            let ids: Vec<&str> = pets.iter().map(|(id, _)| id.as_str()).collect();
+            println!("✓ pet fechado ({}).", ids.join(", "));
+            return Ok(());
+        }
+        let from: Vec<String> = pets
+            .iter()
+            .map(|(id, ws)| match ws {
+                Some(w) => format!("{id} ({w})"),
+                None => id.clone(),
+            })
+            .collect();
+        println!(
+            "✓ pet movido pra cá (fechei {} em outro workspace); reabrindo…",
+            from.join(", ")
+        );
     }
 
     // pane alvo = o focado (via API — mais robusto que a env var HERDR_PANE_ID)
