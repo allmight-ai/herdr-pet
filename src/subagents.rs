@@ -62,35 +62,47 @@ struct ClaudeMeta {
 }
 
 /// Claude Code **e** GLM (Herdr rotula os dois como `claude`; `glm` se um dia vier).
+/// Só o fallback **sem** `session_id` usa isto. O caminho com sessão no disco
+/// vale pra qualquer marca — o pet não filtra por rótulo do Herdr.
 fn claude_kind(a: &AgentInfo) -> bool {
     matches!(a.agent.as_deref(), Some("claude") | Some("glm"))
 }
 
-/// Filhos Claude/GLM, cada um atribuído a **no máximo um** pai `working`.
+/// Janela do fallback sem `session_id`: o jsonl tem que ter avançado agora.
+/// Sessão parada (Claude fora do Herdr, leftover) não é adotada.
+const CLAUDE_FALLBACK_FRESH_SECS: u64 = 120;
+
+/// Filhos do layout `projects/<enc>/<sid>/subagents/`.
 ///
-/// 1. `parent.session_id` presente → pasta `projects/<enc>/<sid>/subagents/`
-///    (Claude Code manda o UUID; o Herdr preenche `agent_session`).
-/// 2. Sem `session_id` (GLM hoje; Claude se o Herdr omitir): fallback **só**
-///    se este pai é o único agente claude-kind naquele cwd, **qualquer**
-///    status. Aí a sessão cujo `*.jsonl` tem o mtime mais recente em
-///    `projects/<enc>/` (todos os roots) é dele. Empate de mtime, 2+
-///    claude-kind no cwd, ou 0 jsonl → sem filho.
+/// 1. **Com `session_id`** (qualquer `agent`, inclusive `None`/`unknown`):
+///    pasta daquela sessão. Contrato do módulo: o pet não filtra por marca.
+/// 2. **Sem `session_id`** (GLM hoje — o Herdr não manda `agent_session`):
+///    fallback **só** se o pai é o único claude-kind naquele cwd, qualquer
+///    status; **e** existe exatamente uma sessão cujo jsonl avançou nos
+///    últimos `CLAUDE_FALLBACK_FRESH_SECS`; **e** ela vive num único root
+///    (`~/.claude` vs `~/.claude-glm` não se misturam). 2+ claude-kind,
+///    jsonl velho, 2 jsonl recentes, ou recentes em 2 roots → zero filhos.
 ///
-/// Preferir subcontar a inflar: não adota sessão de outro pane, não chuta
-/// quando há Fable+GLM no mesmo repo.
+/// O caminho pleno do GLM depende do Herdr passar `agent_session` (follow-up
+/// upstream). Enquanto isso o fallback é **inerte** com vários claude-kind
+/// no mesmo cwd (3 panes neste hunt) — é a disciplina, não um furo pra
+/// afrouxar. Residual: um Claude/GLM **fora** do Herdr no mesmo cwd, se for
+/// o único writer recente, ainda pode ser adotado — unicidade só vê o que
+/// o Herdr lista; recência não prova dono. Sem essa garantia, recusamos.
 fn claude_children(agents: &[AgentInfo]) -> Vec<AgentInfo> {
     let claude: Vec<&AgentInfo> = agents.iter().filter(|a| claude_kind(a)).collect();
     let mut out = Vec::new();
-    for parent in claude
+    for parent in agents
         .iter()
-        .copied()
         .filter(|a| matches!(a.status, AgentStatus::Working))
     {
         if parent.session_id.as_deref().is_some_and(|s| !s.is_empty()) {
             out.extend(claude_running_under(parent));
             continue;
         }
-        out.extend(claude_fallback_newest_if_unique(parent, &claude));
+        if claude_kind(parent) {
+            out.extend(claude_fallback_newest_if_unique(parent, &claude));
+        }
     }
     out
 }
@@ -105,7 +117,8 @@ fn claude_running_under(parent: &AgentInfo) -> Vec<AgentInfo> {
     collect_claude_session(cwd, session, parent)
 }
 
-/// Sem session_id: único claude-kind no cwd → jsonl mais recente é a sessão.
+/// Sem session_id: único claude-kind no cwd + exatamente um jsonl recente
+/// num único root. Senão recusa.
 fn claude_fallback_newest_if_unique(parent: &AgentInfo, claude: &[&AgentInfo]) -> Vec<AgentInfo> {
     let Some(cwd) = parent.cwd.as_deref() else {
         return Vec::new();
@@ -119,19 +132,15 @@ fn claude_fallback_newest_if_unique(parent: &AgentInfo, claude: &[&AgentInfo]) -
     if same != 1 {
         return Vec::new();
     }
-    let Some(sid) = newest_claude_session_id(cwd) else {
+    let Some((root, sid)) = unique_recent_claude_session(cwd) else {
         return Vec::new();
     };
-    collect_claude_session(cwd, &sid, parent)
+    collect_claude_session_in(&root, cwd, &sid, parent)
 }
 
 fn collect_claude_session(cwd: &str, session: &str, parent: &AgentInfo) -> Vec<AgentInfo> {
     for root in claude_roots() {
-        let dir = root
-            .join("projects")
-            .join(encode_claude_project(cwd))
-            .join(session)
-            .join("subagents");
+        let dir = claude_subagents_dir(&root, cwd, session);
         if dir.is_dir() {
             return collect_claude(&dir, parent);
         }
@@ -139,17 +148,47 @@ fn collect_claude_session(cwd: &str, session: &str, parent: &AgentInfo) -> Vec<A
     Vec::new()
 }
 
-/// Sessão cujo transcript `projects/<enc>/<sid>.jsonl` foi escrito por último,
-/// entre todos os roots. Empate de mtime entre sids diferentes → `None`.
-fn newest_claude_session_id(cwd: &str) -> Option<String> {
+fn claude_subagents_dir(root: &Path, cwd: &str, session: &str) -> PathBuf {
+    root.join("projects")
+        .join(encode_claude_project(cwd))
+        .join(session)
+        .join("subagents")
+}
+
+fn collect_claude_session_in(
+    root: &Path,
+    cwd: &str,
+    session: &str,
+    parent: &AgentInfo,
+) -> Vec<AgentInfo> {
+    let dir = claude_subagents_dir(root, cwd, session);
+    if dir.is_dir() {
+        collect_claude(&dir, parent)
+    } else {
+        Vec::new()
+    }
+}
+
+fn jsonl_is_fresh(mtime: std::time::SystemTime, now: std::time::SystemTime) -> bool {
+    match now.duration_since(mtime) {
+        Ok(age) => age.as_secs() <= CLAUDE_FALLBACK_FRESH_SECS,
+        Err(_) => true, // relógio no futuro: trata como fresco
+    }
+}
+
+/// Exatamente **uma** sessão recente em **um** root. 0 recentes, 2+ no
+/// mesmo root, ou recentes em roots distintos (`~/.claude` + `~/.claude-glm`)
+/// → `None`. Não mistura roots na escolha.
+fn unique_recent_claude_session(cwd: &str) -> Option<(PathBuf, String)> {
     let enc = encode_claude_project(cwd);
-    let mut best: Option<(std::time::SystemTime, String)> = None;
-    let mut tied = false;
+    let now = std::time::SystemTime::now();
+    let mut roots_hits: Vec<(PathBuf, Vec<String>)> = Vec::new();
     for root in claude_roots() {
         let proj = root.join("projects").join(&enc);
         let Ok(entries) = fs::read_dir(&proj) else {
             continue;
         };
+        let mut sids = Vec::new();
         for entry in entries.flatten() {
             let path = entry.path();
             let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
@@ -164,39 +203,55 @@ fn newest_claude_session_id(cwd: &str) -> Option<String> {
             let Ok(mtime) = fs::metadata(&path).and_then(|m| m.modified()) else {
                 continue;
             };
-            match &best {
-                None => {
-                    best = Some((mtime, sid.to_string()));
-                    tied = false;
-                }
-                Some((t, other)) if mtime > *t => {
-                    best = Some((mtime, sid.to_string()));
-                    tied = false;
-                }
-                Some((t, other)) if mtime == *t && other != sid => {
-                    tied = true;
-                }
-                _ => {}
+            if !jsonl_is_fresh(mtime, now) {
+                continue;
             }
+            sids.push(sid.to_string());
+        }
+        if !sids.is_empty() {
+            roots_hits.push((root, sids));
         }
     }
-    if tied {
+    if roots_hits.len() != 1 {
         return None;
     }
-    best.map(|(_, sid)| sid)
+    let (root, sids) = roots_hits.pop()?;
+    if sids.len() != 1 {
+        return None;
+    }
+    Some((root, sids.into_iter().next()?))
 }
 
 fn claude_roots() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Ok(explicit) = std::env::var("CLAUDE_CONFIG_DIR") {
-        dirs.push(PathBuf::from(explicit));
+        push_unique_root(&mut dirs, PathBuf::from(explicit));
+    }
+    // Extra roots (testes 2b: dois configs sem mutar HOME). Produção não seta.
+    if let Ok(extra) = std::env::var("HERDR_PET_CLAUDE_ROOTS") {
+        for p in extra.split(':') {
+            if !p.is_empty() {
+                push_unique_root(&mut dirs, PathBuf::from(p));
+            }
+        }
     }
     if let Ok(home) = std::env::var("HOME") {
         let home = PathBuf::from(home);
-        dirs.push(home.join(".claude"));
-        dirs.push(home.join(".claude-glm"));
+        push_unique_root(&mut dirs, home.join(".claude"));
+        push_unique_root(&mut dirs, home.join(".claude-glm"));
     }
     dirs
+}
+
+fn push_unique_root(dirs: &mut Vec<PathBuf>, p: PathBuf) {
+    let key = fs::canonicalize(&p).unwrap_or_else(|_| p.clone());
+    if dirs
+        .iter()
+        .any(|d| fs::canonicalize(d).unwrap_or_else(|_| d.clone()) == key)
+    {
+        return;
+    }
+    dirs.push(p);
 }
 
 /// Convenção do Claude Code: cada char que não é ASCII `[A-Za-z0-9]` vira `-`.
@@ -668,11 +723,35 @@ mod tests {
         // Só CLAUDE_CONFIG_DIR — não toca HOME (testes de state.rs leem XDG/HOME).
         let _guard = CLAUDE_CFG_LOCK.lock().expect("CLAUDE_CONFIG_DIR lock");
         let prev = std::env::var("CLAUDE_CONFIG_DIR").ok();
+        let prev_extra = std::env::var("HERDR_PET_CLAUDE_ROOTS").ok();
         std::env::set_var("CLAUDE_CONFIG_DIR", root);
+        std::env::remove_var("HERDR_PET_CLAUDE_ROOTS");
         let out = f();
         match prev {
             Some(p) => std::env::set_var("CLAUDE_CONFIG_DIR", p),
             None => std::env::remove_var("CLAUDE_CONFIG_DIR"),
+        }
+        match prev_extra {
+            Some(p) => std::env::set_var("HERDR_PET_CLAUDE_ROOTS", p),
+            None => std::env::remove_var("HERDR_PET_CLAUDE_ROOTS"),
+        }
+        out
+    }
+
+    fn with_claude_two_roots<T>(a: &Path, b: &Path, f: impl FnOnce() -> T) -> T {
+        let _guard = CLAUDE_CFG_LOCK.lock().expect("CLAUDE_CONFIG_DIR lock");
+        let prev = std::env::var("CLAUDE_CONFIG_DIR").ok();
+        let prev_extra = std::env::var("HERDR_PET_CLAUDE_ROOTS").ok();
+        std::env::set_var("CLAUDE_CONFIG_DIR", a);
+        std::env::set_var("HERDR_PET_CLAUDE_ROOTS", b);
+        let out = f();
+        match prev {
+            Some(p) => std::env::set_var("CLAUDE_CONFIG_DIR", p),
+            None => std::env::remove_var("CLAUDE_CONFIG_DIR"),
+        }
+        match prev_extra {
+            Some(p) => std::env::set_var("HERDR_PET_CLAUDE_ROOTS", p),
+            None => std::env::remove_var("HERDR_PET_CLAUDE_ROOTS"),
         }
         out
     }
@@ -1143,5 +1222,89 @@ mod tests {
         let out = with_claude_cfg(&root, || expand(&[p.clone()]));
         assert_eq!(out, vec![p]);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn expand_pai_sem_marca_com_session_ainda_pega_filho() {
+        // Regressão: session_id no disco vale pra qualquer agent (None / unknown).
+        let root = tmp_dir("c-no-brand");
+        let cwd = "/tmp/nobrand";
+        write_claude_session(&root, cwd, "sess-x", Some(("kid", true)), 3600);
+        let p = AgentInfo {
+            agent: None,
+            session_id: Some("sess-x".into()),
+            cwd: Some(cwd.into()),
+            pane_id: "w1:pZ".into(),
+            ..parent_claude()
+        };
+        let out = with_claude_cfg(&root, || expand(&[p.clone()]));
+        assert_eq!(
+            out.iter()
+                .filter(|a| a.session_id.as_deref() == Some("kid"))
+                .count(),
+            1,
+            "marca ausente + session_id ainda descobre"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn expand_pai_unknown_com_session_ainda_pega_filho() {
+        let root = tmp_dir("c-unknown");
+        let cwd = "/tmp/unknown-brand";
+        write_claude_session(&root, cwd, "sess-u", Some(("kid", true)), 0);
+        let p = AgentInfo {
+            agent: Some("unknown".into()),
+            session_id: Some("sess-u".into()),
+            cwd: Some(cwd.into()),
+            pane_id: "w1:pU".into(),
+            ..parent_claude()
+        };
+        let out = with_claude_cfg(&root, || expand(&[p.clone()]));
+        assert_eq!(
+            out.iter()
+                .filter(|a| a.session_id.as_deref() == Some("kid"))
+                .count(),
+            1
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn expand_glm_jsonl_velho_nao_e_adotado() {
+        // 2a: único no cwd, mas o jsonl parou há 1 h → leftover / fora do Herdr.
+        let root = tmp_dir("c-glm-stale");
+        let cwd = "/tmp/glm-stale";
+        write_claude_session(&root, cwd, "old-sid", Some(("ghost", true)), 3600);
+        let p = parent_glm(cwd, "w19:pS");
+        let out = with_claude_cfg(&root, || expand(&[p.clone()]));
+        assert!(
+            out.iter().all(|a| a.session_id.as_deref() != Some("ghost")),
+            "jsonl fora da janela de {CLAUDE_FALLBACK_FRESH_SECS}s não é adotado"
+        );
+        assert_eq!(out, vec![p]);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn expand_glm_recente_em_dois_roots_recusa() {
+        // 2b: ~/.claude e ~/.claude-glm (aqui: dois roots fake) com jsonl fresco
+        // no mesmo cwd → não mistura, recusa.
+        let root_a = tmp_dir("c-glm-root-a");
+        let root_b = tmp_dir("c-glm-root-b");
+        let cwd = "/tmp/glm-cross";
+        write_claude_session(&root_a, cwd, "sid-a", Some(("kid-a", true)), 0);
+        write_claude_session(&root_b, cwd, "sid-b", Some(("kid-b", true)), 0);
+        let p = parent_glm(cwd, "w19:pS");
+        let out = with_claude_two_roots(&root_a, &root_b, || expand(&[p.clone()]));
+        assert!(
+            out.iter().all(|a| {
+                a.session_id.as_deref() != Some("kid-a") && a.session_id.as_deref() != Some("kid-b")
+            }),
+            "recentes em 2 roots: ambíguo"
+        );
+        assert_eq!(out, vec![p]);
+        let _ = fs::remove_dir_all(root_a);
+        let _ = fs::remove_dir_all(root_b);
     }
 }
