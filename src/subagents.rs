@@ -326,12 +326,14 @@ fn file_older_than(path: &Path, secs: u64) -> bool {
     }
 }
 
-/// `tool_use.id` sem `tool_result.tool_use_id` casado na cauda = tool
-/// paralela ainda rodando (Bash até 600 s). Independente de mtime.
+/// Só o **último turno**: de trás pra frente até o último `assistant`.
+/// `tool_use` sem `tool_result` casado nesse turno = tool paralela ainda
+/// rodando. Turno antigo desbalanceado não imortaliza; o parse para na
+/// cauda (não no arquivo inteiro).
 fn claude_has_unmatched_tool(data: &str) -> bool {
-    let mut pending = std::collections::HashSet::new();
-    let mut anon: u32 = 0;
-    for line in data.lines() {
+    let mut results = HashSet::new();
+    let mut anon_results: u32 = 0;
+    for line in data.lines().rev() {
         let line = line.trim();
         if line.is_empty() {
             continue;
@@ -342,41 +344,52 @@ fn claude_has_unmatched_tool(data: &str) -> bool {
         let Some(content) = v.pointer("/message/content").and_then(|c| c.as_array()) else {
             continue;
         };
+        if v.get("type").and_then(|t| t.as_str()) != Some("assistant") {
+            for item in content {
+                if item.get("type").and_then(|t| t.as_str()) != Some("tool_result") {
+                    continue;
+                }
+                if let Some(id) = item.get("tool_use_id").and_then(|i| i.as_str()) {
+                    results.insert(id.to_string());
+                } else {
+                    anon_results = anon_results.saturating_add(1);
+                }
+            }
+            continue;
+        }
+        let mut pending = 0u32;
         for item in content {
-            match item.get("type").and_then(|t| t.as_str()) {
-                Some("tool_use") => {
-                    if let Some(id) = item
-                        .get("id")
-                        .and_then(|i| i.as_str())
-                        .filter(|s| !s.is_empty())
-                    {
-                        pending.insert(id.to_string());
-                    } else {
-                        anon = anon.saturating_add(1);
-                    }
+            if item.get("type").and_then(|t| t.as_str()) != Some("tool_use") {
+                continue;
+            }
+            if let Some(id) = item
+                .get("id")
+                .and_then(|i| i.as_str())
+                .filter(|s| !s.is_empty())
+            {
+                if !results.contains(id) {
+                    pending = pending.saturating_add(1);
                 }
-                Some("tool_result") => {
-                    if let Some(id) = item.get("tool_use_id").and_then(|i| i.as_str()) {
-                        pending.remove(id);
-                    } else {
-                        anon = anon.saturating_sub(1);
-                    }
-                }
-                _ => {}
+            } else if anon_results == 0 {
+                pending = pending.saturating_add(1);
+            } else {
+                anon_results = anon_results.saturating_sub(1);
             }
         }
+        return pending > 0;
     }
-    !pending.is_empty() || anon > 0
+    false
 }
 
 /// Ainda trabalhando? jsonl ausente = recém-spawnado. Terminou se o último
 /// assistente tem `end_turn` **ou** só texto (relatório final sem stop_reason —
 /// o Claude às vezes fecha assim e virava fantasma no `⚙ N`).
 ///
-/// Tools paralelas: cada `tool_result` vira uma linha `user`. A rápida
-/// chega antes; a lenta (Bash ≤ 600 s) ainda roda. Se há `tool_use` sem
-/// `tool_result` casado (por id) ⇒ vivo, sem olhar mtime. mtime
-/// (`CHILD_STALE_SECS`) só desempatá cauda **sem** tool pendente.
+/// Tools paralelas no **último** turno: cada `tool_result` vira uma linha
+/// `user`. A rápida chega antes; a lenta (Bash ≤ 600 s) ainda roda. Se
+/// esse turno tem `tool_use` sem `tool_result` casado (por id) ⇒ vivo,
+/// sem olhar mtime. mtime só desempatá cauda **sem** tool pendente no
+/// turno atual (órfão de turno antigo não conta).
 pub fn claude_still_running(jsonl: &Path) -> bool {
     if !jsonl.exists() {
         return true;
@@ -1026,6 +1039,25 @@ mod tests {
         );
         set_age(&jsonl, CHILD_STALE_SECS + 60);
         assert!(claude_still_running(&jsonl));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn claude_jsonl_orfao_turno_antigo_cauda_casada_stale_morto() {
+        // tool_use órfão no turno 1; turno 2 casado. A cauda atual não tem
+        // pendente — mtime velho ⇒ morto (não imortaliza o órfão antigo).
+        let dir = tmp_dir("tr-old-orphan");
+        let jsonl = dir.join("a.jsonl");
+        write(
+            &jsonl,
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_old"}]}}
+{"type":"user","message":{"content":[{"type":"text","text":"ok"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_new"}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_new"}]}}
+"#,
+        );
+        set_age(&jsonl, CHILD_STALE_SECS + 60);
+        assert!(!claude_still_running(&jsonl));
         let _ = fs::remove_dir_all(dir);
     }
 
