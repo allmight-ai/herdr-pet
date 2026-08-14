@@ -1,6 +1,19 @@
 use clap::{Parser, Subcommand};
 use herdr_pet::{hatch, GENESIS_VERSION};
 
+/// `println!` à prova de pipe fechado: `herdr-pet status | head` saía **101**
+/// porque `println!` PANICA quando a escrita falha (EPIPE — quem está do outro
+/// lado do pipe fechou a leitura). Erro ignorado: quem cortou a saída já teve o
+/// que queria, e o exit 0 preserva o contrato de CLI filtrável (`| head`, `|
+/// grep`). Mesma técnica do caminho do `watch` (PTY morta não pula save).
+macro_rules! outln {
+    ($($arg:tt)*) => {{
+        use std::io::Write;
+        let mut out = std::io::stdout().lock();
+        let _ = writeln!(out, $($arg)*);
+    }};
+}
+
 #[derive(Parser)]
 #[command(name = "herdr-pet", version, about = "Companion V-Pet do Herdr — raridade forjada")]
 struct Cli {
@@ -57,8 +70,8 @@ fn main() {
     match cli.cmd.unwrap_or(Cmd::Status) {
         Cmd::Init => match herdr_pet::anchor::ensure_locked_state() {
             Ok(s) => {
-                println!("✓ Companion inicializado — âncora travada em {}", s.anchor);
-                println!("  Pets chocados: {}.", s.hatched.len());
+                outln!("✓ Companion inicializado — âncora travada em {}", s.anchor);
+                outln!("  Pets chocados: {}.", s.hatched.len());
                 print_pet(&hatch(s.github_id, s.active_index));
             }
             Err(e) => {
@@ -69,17 +82,17 @@ fn main() {
         Cmd::Hatch { id, index, json } => {
             let pet = hatch(id, index);
             if json {
-                println!("{}", serde_json::to_string_pretty(&pet).unwrap());
+                outln!("{}", serde_json::to_string_pretty(&pet).unwrap());
             } else {
                 print_pet(&pet);
             }
         }
         Cmd::Lineage { id, count } => {
-            println!("Pets forjados de github:{} (genesis v{})", id, GENESIS_VERSION);
-            println!("{:-<80}", "");
+            outln!("Pets forjados de github:{} (genesis v{})", id, GENESIS_VERSION);
+            outln!("{:-<80}", "");
             for i in 0..count {
                 let pet = hatch(id, i);
-                println!(
+                outln!(
                     "  #{:<3} {:<16} {:<10} {:<8}{} HP {:>3} SP {:>3}  IV {}/{}",
                     pet.index,
                     pet.name,
@@ -420,36 +433,36 @@ fn main() {
                 by_tier.entry(pet.rarity).or_insert(pet);
                 id += 1;
             }
-            println!(
+            outln!(
                 "{}Galeria — um pet de cada tier (cor + sprite diferentes){}\n",
                 herdr_pet::render::DIM,
                 herdr_pet::render::RESET
             );
             for tier in order {
                 if let Some(pet) = by_tier.get(&tier) {
-                    println!(
+                    outln!(
                         "{}",
                         herdr_pet::render::render_casinha(pet, 0, herdr_pet::AgentStatus::Idle, None)
                     );
-                    println!();
+                    outln!();
                 }
             }
             if let Some(pet) = shiny {
-                println!("{}✨ Bônus: um SHINY{}\n", herdr_pet::render::BOLD, herdr_pet::render::RESET);
-                println!(
+                outln!("{}✨ Bônus: um SHINY{}\n", herdr_pet::render::BOLD, herdr_pet::render::RESET);
+                outln!(
                     "{}",
                     herdr_pet::render::render_casinha(&pet, 0, herdr_pet::AgentStatus::Idle, None)
                 );
-                println!();
+                outln!();
             }
             // Easter egg: Primordial exclusivo do criador (shiny iridescente; animado no `watch`)
             let primordial = hatch(herdr_pet::forge::FREDERICO_ID, 0);
-            println!(
+            outln!(
                 "{}✦ Primordial — exclusivo do criador (shiny iridescente){}\n",
                 herdr_pet::render::BOLD,
                 herdr_pet::render::RESET
             );
-            println!(
+            outln!(
                 "{}",
                 herdr_pet::render::render_casinha(&primordial, 0, herdr_pet::AgentStatus::Idle, None)
             );
@@ -461,13 +474,13 @@ fn main() {
             }
             // O aviso detalhado (caminho + erro) já saiu no stderr do load.
             // Sem sugerir `init`: ele vai RECUSAR enquanto o acesso não for corrigido.
-            herdr_pet::state::LoadOutcome::Unreadable => println!(
+            herdr_pet::state::LoadOutcome::Unreadable => outln!(
                 "herdr-pet — state presente mas ilegível (permissão?). Corrija o acesso ao arquivo indicado acima e rode de novo."
             ),
             // `Corrupt`: o conteúdo já foi preservado em `.corrupt` e o init pode
             // recriar com segurança — a orientação abaixo segue válida nos dois casos.
             herdr_pet::state::LoadOutcome::Missing
-            | herdr_pet::state::LoadOutcome::Corrupt => println!(
+            | herdr_pet::state::LoadOutcome::Corrupt => outln!(
                 "herdr-pet — sem state ainda. Rode `herdr-pet init` ou abra o pane `watch` (auto-init)."
             ),
         },
@@ -475,20 +488,20 @@ fn main() {
 }
 
 fn print_pet(pet: &herdr_pet::Pet) {
-    println!("┌─ pet #{} ─────────────────────────────", pet.index);
-    println!("│ nome    : {}", pet.name);
-    println!(
+    outln!("┌─ pet #{} ─────────────────────────────", pet.index);
+    outln!("│ nome    : {}", pet.name);
+    outln!(
         "│ espécie : {}{}",
         pet.species.name,
         if pet.shiny { "  ✦ shiny" } else { "" }
     );
-    println!("│ tier    : {}", pet.rarity.as_title());
-    println!("│ HP/SP   : {} / {}", pet.stats.hp_max, pet.stats.sp_max);
-    println!(
+    outln!("│ tier    : {}", pet.rarity.as_title());
+    outln!("│ HP/SP   : {} / {}", pet.stats.hp_max, pet.stats.sp_max);
+    outln!(
         "│ stats   : ATK {} · DEF {} · SpA {} · SpD {} · SPE {}",
         pet.stats.atk, pet.stats.def, pet.stats.sp_atk, pet.stats.sp_def, pet.stats.speed
     );
-    println!(
+    outln!(
         "│ IV      : {}/{}/{}/{}/{}/{}  (hp/atk/def/spA/spD/spe, total {}/{})",
         pet.iv.hp,
         pet.iv.atk,
@@ -499,10 +512,10 @@ fn print_pet(pet: &herdr_pet::Pet) {
         pet.iv.total(),
         186,
     );
-    println!("│ âncora  : {}", pet.provenance.anchor);
-    println!("│ seed    : {}…", &pet.provenance.seed_hash[..12]);
-    println!("│ versão  : {}", pet.provenance.genesis_version);
-    println!("└──────────────────────────────────────────");
+    outln!("│ âncora  : {}", pet.provenance.anchor);
+    outln!("│ seed    : {}…", &pet.provenance.seed_hash[..12]);
+    outln!("│ versão  : {}", pet.provenance.genesis_version);
+    outln!("└──────────────────────────────────────────");
 }
 
 /// XP, nível e quem está working agora (inclui subagentes).
@@ -512,9 +525,9 @@ fn print_progress(state: &herdr_pet::state::State) {
 
     let lv = level_view(state.xp);
     let snap = herdr_pet::agent::snapshot(&herdr_pet::agent::all_agents_info());
-    println!("┌─ progresso ───────────────────────────");
+    outln!("┌─ progresso ───────────────────────────");
     if lv.xp_span > 0 {
-        println!(
+        outln!(
             "│ nível   : {BOLD}Nv {}{RESET}  {}  {}/{} XP",
             lv.level,
             bar(lv.xp_into as u16, lv.xp_span as u16, 10),
@@ -522,17 +535,17 @@ fn print_progress(state: &herdr_pet::state::State) {
             lv.xp_span,
         );
     } else {
-        println!("│ nível   : {BOLD}Nv 99 ★ máximo{RESET}");
+        outln!("│ nível   : {BOLD}Nv 99 ★ máximo{RESET}");
     }
-    println!("│ total   : {} XP", state.xp);
-    println!(
+    outln!("│ total   : {} XP", state.xp);
+    outln!(
         "│ agora   : {}",
         herdr_pet::agent::format_working_badge(snap.n_working, &snap.working_labels)
     );
     for title in snap.titles.iter().take(5) {
-        println!("{DIM}│           · {title}{RESET}");
+        outln!("{DIM}│           · {title}{RESET}");
     }
-    println!("└──────────────────────────────────────────");
+    outln!("└──────────────────────────────────────────");
 }
 
 /// Caminho do CLI `herdr`: HERDR_BIN_PATH → `herdr` no PATH → `~/.local/bin/herdr`.
@@ -649,17 +662,21 @@ fn close_pet_with_farewell(bin: &str, pane: &str) {
         .unwrap_or(false);
 
     if sent {
+        // Gramática do herdr 0.8.0: `pane wait-output [OPTIONS] <PANE_ID>` SÓ
+        // aceita o pane ANTES das flags — com o pane no fim o parse devolve
+        // `unknown option: <needle>` (exit 2) e o wait nunca esperava nada
+        // (o `let _` engolia; o farewell sobrevivia só pelo hold abaixo).
         let _ = std::process::Command::new(bin)
             .args([
                 "pane",
                 "wait-output",
+                pane,
                 "--match",
                 herdr_pet::session::SUMMARY_NEEDLE,
                 "--source",
                 "visible",
                 "--timeout",
                 "2000",
-                pane,
             ])
             .output();
         // Um pouco menos que o hold do watch: fecha ainda com o quadro na tela.
@@ -718,7 +735,7 @@ fn open_pet_small() -> Result<(), String> {
                 close_pet_with_farewell(&bin, existing);
             }
             let ids: Vec<&str> = pets.iter().map(|(id, _)| id.as_str()).collect();
-            println!("✓ pet fechado ({}).", ids.join(", "));
+            outln!("✓ pet fechado ({}).", ids.join(", "));
             return Ok(());
         }
     }
@@ -729,7 +746,7 @@ fn open_pet_small() -> Result<(), String> {
     let target = match focused_pane() {
         Ok(t) => t,
         Err(e) if !pets.is_empty() => {
-            println!(
+            outln!(
                 "! não movi o pet: sem pane pra reabrir aqui ({e}) — ele segue aberto onde estava."
             );
             return Ok(());
@@ -747,7 +764,7 @@ fn open_pet_small() -> Result<(), String> {
                 None => id.clone(),
             })
             .collect();
-        println!(
+        outln!(
             "✓ pet movido pra cá (fechando {} em outro workspace); reabrindo…",
             from.join(", ")
         );
@@ -799,6 +816,6 @@ fn open_pet_split(bin: &str, target: &str) -> Result<(), String> {
         .args(["pane", "focus", "--pane", &pet, "--direction", "up"])
         .output();
 
-    println!("✓ pet aberto ({pet}) — dockado embaixo. Ctrl+C fecha · redimensionar: prefix+r");
+    outln!("✓ pet aberto ({pet}) — dockado embaixo. Ctrl+C fecha · redimensionar: prefix+r");
     Ok(())
 }
