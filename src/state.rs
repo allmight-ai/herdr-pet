@@ -90,7 +90,8 @@ impl State {
             linear += gained;
         }
         for (pane_id, observed) in &latest {
-            self.last_seq_by_pane.insert((*pane_id).to_string(), *observed);
+            // Nunca rebobinar: seq omitido (default 0) ou menor que o last não apaga a baseline.
+            self.remember_seq(pane_id, *observed);
         }
         // Fator de largura harmonic_milli(N)/N: 1 agente = MILLI (cheio); mais = menos cada.
         let factor = if contributors > 0 {
@@ -105,11 +106,28 @@ impl State {
 
     /// Avança a baseline de cada agente **sem creditar XP** — usado no poll enquanto o
     /// pane está aberto, pra o próximo catch-up contar só o período fechado (sem dupla
-    /// contagem). O nome carrega o invariante: só registra o que já vimos.
+    /// contagem). Dedupe pelo maior seq do slice; nunca regride um last já visto
+    /// (pane duplicado / seq default 0 não rebobina — senão o catch-up seguinte
+    /// paga replay).
     pub fn record_seen_seq(&mut self, agents: &[PaneSeq]) {
+        let mut latest: HashMap<&str, u64> = HashMap::new();
         for ps in agents {
-            self.last_seq_by_pane.insert(ps.pane_id.clone(), ps.seq);
+            latest
+                .entry(&ps.pane_id)
+                .and_modify(|e| *e = (*e).max(ps.seq))
+                .or_insert(ps.seq);
         }
+        for (pane_id, observed) in latest {
+            self.remember_seq(pane_id, observed);
+        }
+    }
+
+    /// Baseline monotônica por pane: primeira vista grava; depois só sobe.
+    fn remember_seq(&mut self, pane_id: &str, observed: u64) {
+        self.last_seq_by_pane
+            .entry(pane_id.to_string())
+            .and_modify(|e| *e = (*e).max(observed))
+            .or_insert(observed);
     }
 }
 

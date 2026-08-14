@@ -2,9 +2,12 @@
 //!
 //! Cada backend descobre os filhos do **seu** pai (Claude Code via
 //! `projects/<cwd>/<session>/subagents/`; Grok via `active_sessions.json` +
-//! `sessions/<cwd>/<id>/subagents/`). O pet não filtra por marca: se o pai
-//! tem sessão no disco, os filhos ativos entram no `⚙ N` e no XP.
+//! `sessions/<cwd>/<id>/subagents/`, amarrado por session_id ou
+//! `HERDR_PANE_ID` do pid — não pelo cwd sozinho). O pet não filtra por
+//! marca: se o pai tem sessão no disco, os filhos ativos entram no `⚙ N`
+//! e no XP.
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -14,6 +17,7 @@ use crate::agent::{AgentInfo, AgentStatus};
 
 /// Expande a lista do Herdr com todo subagente ainda rodando, de qualquer pai.
 /// Filho só conta se o pai está `working` — senão o jsonl morto vira fantasma no `⚙ N`.
+/// Cada filho entra no máximo uma vez (dedupe por `session_id` / id do subagente).
 pub fn expand(agents: &[AgentInfo]) -> Vec<AgentInfo> {
     let mut extra = Vec::new();
     for a in agents {
@@ -21,13 +25,32 @@ pub fn expand(agents: &[AgentInfo]) -> Vec<AgentInfo> {
             continue;
         }
         extra.extend(claude_running_under(a));
-        extra.extend(grok_running_under(a));
     }
+    extra.extend(grok_children(agents));
+    extra = dedupe_children(extra);
     if extra.is_empty() {
         return agents.to_vec();
     }
     let mut out = agents.to_vec();
     out.extend(extra);
+    out
+}
+
+/// Um filho = uma entrada. Chave: `session_id` do child (id do subagente);
+/// se faltar, o `pane_id` sintético. Atribui ao primeiro pai que o descobriu.
+fn dedupe_children(children: Vec<AgentInfo>) -> Vec<AgentInfo> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::with_capacity(children.len());
+    for c in children {
+        let key = c
+            .session_id
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| c.pane_id.clone());
+        if seen.insert(key) {
+            out.push(c);
+        }
+    }
     out
 }
 
@@ -164,6 +187,8 @@ pub fn claude_still_running(jsonl: &Path) -> bool {
 struct GrokActive {
     session_id: String,
     #[serde(default)]
+    pid: u32,
+    #[serde(default)]
     cwd: Option<String>,
 }
 
@@ -181,24 +206,50 @@ struct GrokMeta {
     completed_at: Option<String>,
 }
 
-fn grok_running_under(parent: &AgentInfo) -> Vec<AgentInfo> {
-    if parent.agent.as_deref() != Some("grok") {
+/// Filhos Grok, cada um atribuído a **no máximo um** pai `working`.
+///
+/// Estratégia (em ordem) — `active_sessions.json` traz `session_id` + `pid`,
+/// mas o Herdr hoje não manda `agent_session` nos panes grok, então cwd sozinho
+/// era a chave errada (2 pais working no mesmo repo clonavam o mesmo filho):
+///
+/// 1. `parent.session_id` == entrada ativa — se o Herdr passar a sessão.
+/// 2. `HERDR_PANE_ID` em `/proc/{pid}/environ` == `parent.pane_id` — o Herdr
+///    injeta isso no processo; o pid vem do `active_sessions.json`. É a chave
+///    pane↔sessão disponível hoje.
+/// 3. Sem chave: primeiro pai grok *working* com o mesmo cwd. Garante
+///    2 pais + 1 filho ⇒ conta 1 (testes / processo fora do Herdr).
+///
+/// Se (1) ou (2) amarram a sessão a um pai **idle**, os filhos **não** vazam
+/// para o vizinho working — `expand` só conta filho de pai `working`.
+fn grok_children(agents: &[AgentInfo]) -> Vec<AgentInfo> {
+    let grok: Vec<&AgentInfo> = agents
+        .iter()
+        .filter(|a| a.agent.as_deref() == Some("grok"))
+        .collect();
+    let working: Vec<&AgentInfo> = grok
+        .iter()
+        .copied()
+        .filter(|a| matches!(a.status, AgentStatus::Working))
+        .collect();
+    if working.is_empty() {
         return Vec::new();
     }
-    let Some(cwd) = parent.cwd.as_deref() else {
-        return Vec::new();
-    };
     let home = grok_home();
     let sessions = match load_grok_active(&home) {
         Some(s) => s,
         None => return Vec::new(),
     };
-    let want = norm_cwd(cwd);
     let mut out = Vec::new();
-    for s in sessions {
-        if s.cwd.as_deref().map(norm_cwd).as_deref() != Some(want.as_str()) {
+    for s in &sessions {
+        let Some(parent) = owner_for_grok_session(s, &grok, &working) else {
+            continue;
+        };
+        if !matches!(parent.status, AgentStatus::Working) {
             continue;
         }
+        let Some(cwd) = s.cwd.as_deref().or(parent.cwd.as_deref()) else {
+            continue;
+        };
         let dir = home
             .join("sessions")
             .join(encode_grok_cwd(cwd))
@@ -207,6 +258,51 @@ fn grok_running_under(parent: &AgentInfo) -> Vec<AgentInfo> {
         out.extend(collect_grok(&dir, parent));
     }
     out
+}
+
+fn owner_for_grok_session<'a>(
+    session: &GrokActive,
+    grok: &[&'a AgentInfo],
+    working: &[&'a AgentInfo],
+) -> Option<&'a AgentInfo> {
+    if let Some(p) = grok
+        .iter()
+        .find(|a| a.session_id.as_deref() == Some(session.session_id.as_str()))
+    {
+        return Some(*p);
+    }
+    if let Some(pane) = herdr_pane_id_for_pid(session.pid) {
+        if let Some(p) = grok.iter().find(|a| a.pane_id == pane) {
+            return Some(*p);
+        }
+    }
+    let want = session.cwd.as_deref().map(norm_cwd);
+    working
+        .iter()
+        .copied()
+        .find(|a| a.cwd.as_deref().map(norm_cwd).as_deref() == want.as_deref())
+}
+
+/// `HERDR_PANE_ID` do processo Grok (Herdr injeta no PTY). `None` se o pid
+/// sumiu, não é do Herdr, ou a gente não consegue ler `/proc`.
+fn herdr_pane_id_for_pid(pid: u32) -> Option<String> {
+    if pid == 0 {
+        return None;
+    }
+    let data = fs::read(format!("/proc/{pid}/environ")).ok()?;
+    for pair in data.split(|b| *b == 0) {
+        let Some(rest) = pair.strip_prefix(b"HERDR_PANE_ID=") else {
+            continue;
+        };
+        let Ok(s) = std::str::from_utf8(rest) else {
+            continue;
+        };
+        let s = s.trim();
+        if !s.is_empty() {
+            return Some(s.to_string());
+        }
+    }
+    None
 }
 
 fn grok_home() -> PathBuf {
@@ -320,6 +416,21 @@ fn child(parent: &AgentInfo, id: &str, title: Option<String>) -> AgentInfo {
 mod tests {
     use super::*;
     use std::io::Write;
+    use std::sync::Mutex;
+
+    static GROK_HOME_LOCK: Mutex<()> = Mutex::new(());
+
+    fn with_grok_home<T>(home: &Path, f: impl FnOnce() -> T) -> T {
+        let _guard = GROK_HOME_LOCK.lock().expect("GROK_HOME lock");
+        let prev = std::env::var("GROK_HOME").ok();
+        std::env::set_var("GROK_HOME", home);
+        let out = f();
+        match prev {
+            Some(p) => std::env::set_var("GROK_HOME", p),
+            None => std::env::remove_var("GROK_HOME"),
+        }
+        out
+    }
 
     fn parent_claude() -> AgentInfo {
         AgentInfo {
@@ -449,14 +560,20 @@ mod tests {
         );
         let got = collect_claude(&dir, &parent_claude());
         assert_eq!(got.len(), 1);
-        assert_eq!(got[0].title.as_deref(), Some("Reescrever copy do carrossel"));
+        assert_eq!(
+            got[0].title.as_deref(),
+            Some("Reescrever copy do carrossel")
+        );
         assert_eq!(got[0].pane_id, "w16:p5:aaa");
         let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
     fn grok_status_completed_nao_roda() {
-        assert!(!grok_still_running("completed", Some("2026-08-13T00:00:00Z")));
+        assert!(!grok_still_running(
+            "completed",
+            Some("2026-08-13T00:00:00Z")
+        ));
         assert!(!grok_still_running("completed", None));
         assert!(grok_still_running("running", None));
         assert!(grok_still_running("", None));
@@ -484,8 +601,95 @@ mod tests {
 
     #[test]
     fn expand_nao_inventa_filho_sem_disco() {
+        let home = tmp_dir("g-empty");
+        write(&home.join("active_sessions.json"), "[]");
         let grok = parent_grok();
-        let out = expand(&[grok.clone()]);
+        let out = with_grok_home(&home, || expand(&[grok.clone()]));
         assert_eq!(out, vec![grok]);
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn expand_dois_pais_grok_mesmo_cwd_um_filho_conta_um() {
+        // C2: dois grok working no mesmo cwd não podem clonar o mesmo filho.
+        // Sem HERDR_PANE_ID (pid fake), cai no fallback "primeiro working do cwd".
+        let home = tmp_dir("g-fanout");
+        let cwd = "/tmp/proj-fanout";
+        write(
+            &home.join("active_sessions.json"),
+            r#"[{"session_id":"sess-a","pid":4294967294,"cwd":"/tmp/proj-fanout"}]"#,
+        );
+        write(
+            &home
+                .join("sessions")
+                .join(encode_grok_cwd(cwd))
+                .join("sess-a")
+                .join("subagents")
+                .join("kid")
+                .join("meta.json"),
+            r#"{"subagent_id":"kid","description":"um filho","status":"running"}"#,
+        );
+        let a = AgentInfo {
+            pane_id: "w1:p1".into(),
+            cwd: Some(cwd.into()),
+            session_id: None,
+            ..parent_grok()
+        };
+        let b = AgentInfo {
+            pane_id: "w1:p2".into(),
+            cwd: Some(cwd.into()),
+            session_id: None,
+            ..parent_grok()
+        };
+        let out = with_grok_home(&home, || expand(&[a.clone(), b.clone()]));
+        let kids: Vec<_> = out
+            .iter()
+            .filter(|x| x.session_id.as_deref() == Some("kid"))
+            .collect();
+        assert_eq!(kids.len(), 1, "filho não pode contar 2×");
+        assert_eq!(out.len(), 3, "2 pais + 1 filho");
+        assert_eq!(kids[0].pane_id, "w1:p1:kid", "fica no primeiro pai working");
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn grok_filho_de_pai_idle_nao_vaza_pro_vizinho_quando_amarrado() {
+        // (1) session_id do pai idle bate: filho não entra no working vizinho.
+        let home = tmp_dir("g-idle-bind");
+        let cwd = "/tmp/proj-idle-bind";
+        write(
+            &home.join("active_sessions.json"),
+            r#"[{"session_id":"sess-idle","pid":4294967293,"cwd":"/tmp/proj-idle-bind"}]"#,
+        );
+        write(
+            &home
+                .join("sessions")
+                .join(encode_grok_cwd(cwd))
+                .join("sess-idle")
+                .join("subagents")
+                .join("ghost")
+                .join("meta.json"),
+            r#"{"subagent_id":"ghost","description":"do idle","status":"running"}"#,
+        );
+        let idle = AgentInfo {
+            status: AgentStatus::Idle,
+            pane_id: "w1:pIdle".into(),
+            cwd: Some(cwd.into()),
+            session_id: Some("sess-idle".into()),
+            ..parent_grok()
+        };
+        let working = AgentInfo {
+            pane_id: "w1:pWork".into(),
+            cwd: Some(cwd.into()),
+            session_id: None,
+            ..parent_grok()
+        };
+        let out = with_grok_home(&home, || expand(&[idle.clone(), working.clone()]));
+        assert!(
+            out.iter().all(|a| a.session_id.as_deref() != Some("ghost")),
+            "filho do idle não vaza"
+        );
+        assert_eq!(out, vec![idle, working]);
+        let _ = fs::remove_dir_all(home);
     }
 }
