@@ -79,13 +79,13 @@ git config core.hooksPath githooks   # hooks versionados: post-commit + post-mer
 herdr-pet setup               # reaplicar atalho + PATH (idempotente)
 herdr-pet open                # abre ou fecha o painel (precisa do Herdr rodando)
 herdr-pet watch               # casinha ao vivo no terminal atual
-herdr-pet watch --mood done   # pré-visualiza um humor
+herdr-pet watch --mood done   # pré-visualiza um humor (dev, só-leitura)
 herdr-pet status              # identidade + XP, nível e quem está working
 herdr-pet gallery             # um pet de cada raridade
 herdr-pet init                # trava a âncora do GitHub e choca o pet #0
 ```
 
-O `watch` inicializa sozinho se ainda não houver state.
+O `watch` inicializa sozinho se ainda não houver state. `--mood` é modo dev de pré-visualização: **nunca** grava no state nem ganha XP (o humor é forçado, não trabalho real); sem state, exige `--id` — ex.: `herdr-pet watch --mood done --id 42`.
 
 ### Atalho automático
 
@@ -127,8 +127,8 @@ A detecção usa o Screen Manifest do Herdr (Claude Code sem configuração extr
 O pet ganha XP só com trabalho **real de qualquer agente** — conta todos os projetos, não só o focado. 1 agente `working` rende o ritmo cheio (~1000 XP/h); cada agente extra rende menos (½, ⅓, … — decaimento harmônico, anti-proliferação). Com o painel fechado, o trabalho é contabilizado na reabertura pelo `state_change_seq`, num ritmo menor. `idle` não rende XP. O nível (1–99) é derivado do XP total — cada nível pede mais que o anterior (`100 × nível`); chegar ao 99 é meta de longo prazo (~1 ano). Ao fechar o pane, um resumo da sessão mostra agentes, XP ganho, nível e duração. Ver `CONTEXT.md` e `docs/adr/`.
 
 **State.**  
-Âncora e índice ativo ficam em `HERDR_PLUGIN_STATE_DIR` (no Herdr) ou em `.herdr-pet-state/` (dev).  
-A raridade não “mora” no arquivo: é recalculada a partir da âncora.
+Âncora e índice ativo ficam em `HERDR_PLUGIN_STATE_DIR` (pane do Herdr) ou no dir XDG do plugin (`~/.local/state/herdr/plugins/allmight-ai.herdr-pet/`) — padrão de leitura **e** escrita fora do pane (`init`/`save` criam); `.herdr-pet-state/` no diretório atual só é usado se **já existir** (compat com dev antigo, nunca criado).  
+A gravação é atômica (tmp+rename); se o arquivo ficar ilegível, o conteúdo é preservado em `state.json.corrupt` (com aviso) antes de qualquer recriação — nada se perde em silêncio. A raridade não “mora” no arquivo: é recalculada a partir da âncora.
 
 ## Stack e licença
 
@@ -197,13 +197,13 @@ git config core.hooksPath githooks   # versioned hooks: post-commit + post-merge
 herdr-pet setup               # re-apply hotkey + PATH (idempotent)
 herdr-pet open                # toggle the pane (Herdr must be running)
 herdr-pet watch               # live house in the current terminal
-herdr-pet watch --mood done   # preview a mood
+herdr-pet watch --mood done   # preview a mood (dev, read-only)
 herdr-pet status              # identity + XP, level, and who is working
 herdr-pet gallery             # one pet per rarity tier
 herdr-pet init                # lock GitHub anchor and hatch pet #0
 ```
 
-`watch` auto-inits when there is no state yet.
+`watch` auto-inits when there is no state yet. `--mood` is a read-only dev preview: it **never** writes state or earns XP (the mood is forced, not real work); with no state, pass `--id` — e.g. `herdr-pet watch --mood done --id 42`.
 
 ### Automatic hotkey
 
@@ -223,8 +223,8 @@ The same `(github_id, index)` always produces the same pet.
 The pet earns XP only from **any agent's** real work — it counts all projects, not just the focused one. 1 working agent earns the full rate (~1000 XP/h); each extra agent earns less (½, ⅓, … — harmonic decay, anti-proliferation). With the pane closed, work is tallied on reopen via `state_change_seq` at a lower rate. `idle` earns nothing. Level (1–99) is derived from total XP — each level needs more than the last (`100 × level`); reaching 99 is a long-term goal (~1 year). Closing the pane prints a session summary (agents, XP gained, level, duration). See `CONTEXT.md` and `docs/adr/`.
 
 **State.**  
-Anchor and active index live under `HERDR_PLUGIN_STATE_DIR` (Herdr) or `.herdr-pet-state/` (dev).  
-Rarity is not stored as ground truth; it is re-derived from the anchor.
+Anchor and active index live under `HERDR_PLUGIN_STATE_DIR` (Herdr pane) or the plugin's XDG dir (`~/.local/state/herdr/plugins/allmight-ai.herdr-pet/`) — the default for reading **and** writing outside the pane (`init`/`save` create it); `.herdr-pet-state/` in the current directory is only honored if it **already exists** (old-dev compat, never created).  
+Writes are atomic (tmp+rename); an unreadable file is preserved as `state.json.corrupt` (with a warning) before any re-creation — nothing is lost silently. Rarity is not stored as ground truth; it is re-derived from the anchor.
 
 ### Stack & license
 

@@ -5,7 +5,6 @@
 //! Este módulo faz os dois de forma idempotente no `build` e no `startup`.
 
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -458,15 +457,9 @@ fn set_executable(path: &Path) -> Result<(), String> {
 }
 
 fn write_atomic(path: &Path, content: &str) -> Result<(), String> {
-    let tmp = path.with_extension("tmp-herdr-pet");
-    {
-        let mut f = fs::File::create(&tmp).map_err(|e| format!("create tmp: {e}"))?;
-        f.write_all(content.as_bytes())
-            .map_err(|e| format!("write tmp: {e}"))?;
-        f.sync_all().ok();
-    }
-    fs::rename(&tmp, path).map_err(|e| format!("rename tmp: {e}"))?;
-    Ok(())
+    // Compartilhado com o state (C9): tmp + fsync + rename em `state::write_atomic`.
+    crate::state::write_atomic(path, content.as_bytes())
+        .map_err(|e| format!("gravar atômico {}: {e}", path.display()))
 }
 
 fn try_reload_config() -> ReloadStatus {

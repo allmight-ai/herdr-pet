@@ -1,6 +1,19 @@
 use clap::{Parser, Subcommand};
 use herdr_pet::{hatch, GENESIS_VERSION};
 
+/// `println!` à prova de pipe fechado: `herdr-pet status | head` saía **101**
+/// porque `println!` PANICA quando a escrita falha (EPIPE — quem está do outro
+/// lado do pipe fechou a leitura). Erro ignorado: quem cortou a saída já teve o
+/// que queria, e o exit 0 preserva o contrato de CLI filtrável (`| head`, `|
+/// grep`). Mesma técnica do caminho do `watch` (PTY morta não pula save).
+macro_rules! outln {
+    ($($arg:tt)*) => {{
+        use std::io::Write;
+        let mut out = std::io::stdout().lock();
+        let _ = writeln!(out, $($arg)*);
+    }};
+}
+
 #[derive(Parser)]
 #[command(name = "herdr-pet", version, about = "Companion V-Pet do Herdr — raridade forjada")]
 struct Cli {
@@ -57,8 +70,8 @@ fn main() {
     match cli.cmd.unwrap_or(Cmd::Status) {
         Cmd::Init => match herdr_pet::anchor::ensure_locked_state() {
             Ok(s) => {
-                println!("✓ Companion inicializado — âncora travada em {}", s.anchor);
-                println!("  Pets chocados: {}.", s.hatched.len());
+                outln!("✓ Companion inicializado — âncora travada em {}", s.anchor);
+                outln!("  Pets chocados: {}.", s.hatched.len());
                 print_pet(&hatch(s.github_id, s.active_index));
             }
             Err(e) => {
@@ -69,17 +82,17 @@ fn main() {
         Cmd::Hatch { id, index, json } => {
             let pet = hatch(id, index);
             if json {
-                println!("{}", serde_json::to_string_pretty(&pet).unwrap());
+                outln!("{}", serde_json::to_string_pretty(&pet).unwrap());
             } else {
                 print_pet(&pet);
             }
         }
         Cmd::Lineage { id, count } => {
-            println!("Pets forjados de github:{} (genesis v{})", id, GENESIS_VERSION);
-            println!("{:-<80}", "");
+            outln!("Pets forjados de github:{} (genesis v{})", id, GENESIS_VERSION);
+            outln!("{:-<80}", "");
             for i in 0..count {
                 let pet = hatch(id, i);
-                println!(
+                outln!(
                     "  #{:<3} {:<16} {:<10} {:<8}{} HP {:>3} SP {:>3}  IV {}/{}",
                     pet.index,
                     pet.name,
@@ -99,6 +112,14 @@ fn main() {
             let (mut state, persist) = match (herdr_pet::state::load(), id) {
                 (Some(s), _) => (s, true),
                 (None, Some(i)) => (herdr_pet::state::State::new(i), false), // dev transitório
+                // `--mood` é modo dev de display: não auto-inicializa state (criar
+                // state é gravação) — sem state, exige `--id`.
+                (None, None) if forced.is_some() => {
+                    eprintln!(
+                        "modo dev (--mood): sem state e sem --id\n(passe `--id N` — o modo dev não cria state)"
+                    );
+                    std::process::exit(1);
+                }
                 (None, None) => match herdr_pet::anchor::ensure_locked_state() {
                     Ok(s) => (s, true),
                     Err(e) => {
@@ -110,6 +131,16 @@ fn main() {
                     }
                 },
             };
+            // Com `--mood` o state (se houver) é só leitura: exibe o pet, nunca grava.
+            let persist = persist && forced.is_none();
+            // "O que está no disco" na abertura — capturado ANTES do catch-up: o XP e
+            // as baselines que o catch-up creditar nascem "sujos" (não salvos) e o
+            // primeiro gate periódico/final os grava. Inicializar depois do catch-up
+            // os marcaria como já salvos → nenhum save → disco nunca avança → o
+            // catch-up se repaga a cada reabertura (replay infinito).
+            let mut last_saved_xp = state.xp;
+            let mut last_saved_seqs: std::collections::HashMap<String, u64> =
+                state.last_seq_by_pane.clone();
             let gid = state.github_id;
             let idx = state.active_index;
 
@@ -126,8 +157,13 @@ fn main() {
             let _ = ctrlc::set_handler(move || {
                 r.store(false, Ordering::SeqCst);
             });
-            print!("\x1b[?1049h"); // alternate screen buffer
-            let _ = std::io::stdout().flush();
+            // Handle de stdout com erro IGNORADO em todo o caminho do watch: pane
+            // destruído sem Ctrl+C mata a PTY e `print!` PANICA quando a escrita
+            // falha — o panic pularia o save final (perda de até ~30s de XP).
+            // `let _ = write!` deixa o processo morrer em paz, save incluído.
+            let mut out = std::io::stdout().lock();
+            let _ = write!(out, "\x1b[?1049h"); // alternate screen buffer
+            let _ = out.flush();
 
             // Otimização: o pet é imutável pra (gid, idx) — forja UMA vez, cacheia.
             let pet = hatch(gid, idx);
@@ -143,7 +179,8 @@ fn main() {
 
             // Sessão começa no XP/nível de disco — o catch-up entra no delta do resumo.
             let mut session = Session::start(state.xp, state.level());
-            if matches!(status, herdr_pet::AgentStatus::Working) {
+            // O mood forçado não entra no resumo como agente — não houve trabalho real.
+            if forced.is_none() && matches!(status, herdr_pet::AgentStatus::Working) {
                 session.note_working(std::iter::empty::<&str>(), n_working);
             }
 
@@ -163,9 +200,16 @@ fn main() {
             let mut accrual = Accrual::new();
             let mut last_instant = Instant::now();
 
-            // Save periódico (~30s) e só se o XP mudou — sem I/O de disco a cada tick.
+            // Save periódico (~30s), se o XP OU as baselines de seq mudaram desde o
+            // último save (`last_saved_*`, capturados antes do catch-up) — sem I/O de
+            // disco a cada tick. Baseline avançada pelo poll e não salva morre na
+            // memória: o catch-up seguinte paga de novo o trecho já visto com o pane
+            // aberto. Sem clonar mapa por frame: guardamos o mapa do momento do último
+            // save (clone só ao salvar) e comparamos só quando o gate de frame passa
+            // (~a cada 30s).
             let mut last_save_frame = 0u32;
-            let mut last_saved_xp = state.xp;
+            // true = o último save tentado falhou (marcador `⚠ save` no rodapé).
+            let mut save_failing = false;
             const SAVE_EVERY_FRAMES: u32 = 36; // ~30s (ciclo ~0,8s)
             const TITLE_ROTATION_FRAMES: u32 = 5; // ~4s por tarefa quando há vários working
 
@@ -188,13 +232,17 @@ fn main() {
                     status = snap.status;
                     titles = snap.titles;
                     n_working = snap.n_working;
+                    // Labels também: o rodapé `⚙ N nomes` é o conjunto ATUAL —
+                    // sem isso o badge misturava N novo com nomes da abertura.
+                    working_labels = snap.working_labels;
                     session.note_working(&snap.working_panes, snap.n_working);
                 }
                 // XP live: ritmo base × H(n_working). Sem working → multiplicador 0 → nada.
+                // `--mood` zera o multiplicador: humor forçado não é trabalho real.
                 let now = Instant::now();
                 let dt = now.duration_since(last_instant);
                 last_instant = now;
-                let mult = harmonic_milli(n_working);
+                let mult = if forced.is_some() { 0 } else { harmonic_milli(n_working) };
                 if mult > 0 {
                     state.xp += accrual.add_working(dt, mult);
                 }
@@ -212,6 +260,12 @@ fn main() {
                 let lv = level_view(state.xp);
                 let period = herdr_pet::render::animation_period(status, &pet);
                 let badge = herdr_pet::agent::format_working_badge(n_working, &working_labels);
+                // Sinal de save falho, NÃO-SPAM: `· ⚠ save` fica no rodapé enquanto
+                // o último save tiver falhado e some no primeiro que passa. Sinal
+                // por transição (entra no sig como string): liga/desliga ⇒ um
+                // redraw; falha persistente não redesenha nada por frame. Nada de
+                // eprintln no loop — sujaria o LCD.
+                let footer = if save_failing { format!("{badge} · ⚠ save") } else { badge };
                 let sig = (
                     status,
                     frame % period,
@@ -219,40 +273,57 @@ fn main() {
                     lv.level,
                     lv.xp_into,
                     n_working,
-                    badge.clone(),
+                    footer.clone(),
                 );
                 if last_sig.as_ref() != Some(&sig) {
-                    print!("\x1b[H\x1b[J"); // topo + limpa até o fim (sem scrollar)
-                    println!(
+                    let _ = write!(out, "\x1b[H\x1b[J"); // topo + limpa até o fim (sem scrollar)
+                    let _ = writeln!(
+                        out,
                         "{}",
                         herdr_pet::render::render_casinha(&pet, frame, status, title.as_deref())
                     );
-                    println!();
+                    let _ = writeln!(out);
                     if lv.xp_span > 0 {
-                        println!(
-                            "{DIM}#{idx} · {BOLD}Nv {}{RESET}{DIM} · {RESET}{}{DIM} {}/{} XP · {badge}{RESET}",
+                        let _ = writeln!(
+                            out,
+                            "{DIM}#{idx} · {BOLD}Nv {}{RESET}{DIM} · {RESET}{}{DIM} {}/{} XP · {footer}{RESET}",
                             lv.level,
                             bar(lv.xp_into as u16, lv.xp_span as u16, 10),
                             lv.xp_into,
                             lv.xp_span,
                         );
                     } else {
-                        println!(
-                            "{DIM}#{idx} · {BOLD}Nv 99 ★ máximo{RESET}{DIM} · {badge} · Ctrl+C{RESET}",
+                        let _ = writeln!(
+                            out,
+                            "{DIM}#{idx} · {BOLD}Nv 99 ★ máximo{RESET}{DIM} · {footer} · Ctrl+C{RESET}",
                         );
                     }
-                    let _ = std::io::stdout().flush();
+                    let _ = out.flush();
                     last_sig = Some(sig);
                 }
 
-                // Save periódico (sem ddos de disco): ~a cada 30s, só se o XP mudou.
+                // Save periódico (sem ddos de disco): ~a cada 30s, se o XP ou as
+                // baselines mudaram desde o último save. Gate de frame primeiro —
+                // a comparação do mapa roda ~a cada 30s, não a cada frame.
                 if persist
-                    && state.xp != last_saved_xp
                     && frame.wrapping_sub(last_save_frame) >= SAVE_EVERY_FRAMES
+                    && (state.xp != last_saved_xp || state.last_seq_by_pane != last_saved_seqs)
                 {
-                    if herdr_pet::state::save(&state).is_ok() {
-                        last_saved_xp = state.xp;
-                        last_save_frame = frame;
+                    match herdr_pet::state::save(&state) {
+                        Ok(()) => {
+                            last_saved_xp = state.xp;
+                            last_saved_seqs = state.last_seq_by_pane.clone();
+                            last_save_frame = frame;
+                            save_failing = false; // marcador some no primeiro save que passa
+                        }
+                        // Falha deixa de ser silenciosa: acende `⚠ save` no rodapé.
+                        // `last_save_frame` anda TAMBÉM na falha — retry no mesmo
+                        // ritmo ~30s, sem martelar disco a cada frame (~0,8s) se o
+                        // estado persistir (ex.: fs read-only).
+                        Err(_) => {
+                            save_failing = true;
+                            last_save_frame = frame;
+                        }
                     }
                 }
 
@@ -266,9 +337,16 @@ fn main() {
                 frame = frame.wrapping_add(1);
             }
 
-            // Save final na saída (Ctrl+C / SIGHUP do toggle) — não perde o progresso.
-            if persist && state.xp != last_saved_xp {
-                let _ = herdr_pet::state::save(&state);
+            // Save final na saída (Ctrl+C / SIGHUP do toggle) — não perde o progresso
+            // (XP ou baselines de seq ainda não salvos). Roda ANTES de qualquer
+            // print do farewell e independe do stdout estar vivo (pane pode ter
+            // sido destruído — os prints abaixo ignoram erro justamente por isso).
+            if persist
+                && (state.xp != last_saved_xp || state.last_seq_by_pane != last_saved_seqs)
+            {
+                if herdr_pet::state::save(&state).is_err() {
+                    save_failing = true;
+                }
             }
 
             let summary = session.summarize(state.xp, state.level());
@@ -282,21 +360,30 @@ fn main() {
             } else {
                 status
             };
-            print!("\x1b[H\x1b[J");
-            println!(
+            let _ = write!(out, "\x1b[H\x1b[J");
+            let _ = writeln!(
+                out,
                 "{}",
                 herdr_pet::render::render_casinha(&pet, frame, goodbye, None)
             );
-            println!();
-            println!("{BOLD}{line}{RESET}");
-            let _ = std::io::stdout().flush();
+            let _ = writeln!(out);
+            let _ = writeln!(out, "{BOLD}{line}{RESET}");
+            if save_failing {
+                // Última chance de avisar: o save final também falhou — o XP da
+                // sessão não chegou ao disco (o rodapé `⚠ save` morreu com o pane).
+                let _ = writeln!(
+                    out,
+                    "{DIM}⚠ save falhou — progresso não gravado no disco{RESET}"
+                );
+            }
+            let _ = out.flush();
             std::thread::sleep(std::time::Duration::from_millis(
                 herdr_pet::session::FAREWELL_MS,
             ));
 
-            print!("\x1b[?1049l"); // restaura o buffer principal
-            println!("{line}");
-            let _ = std::io::stdout().flush();
+            let _ = write!(out, "\x1b[?1049l"); // restaura o buffer principal
+            let _ = writeln!(out, "{line}");
+            let _ = out.flush();
         }
         Cmd::Setup { quiet } => match herdr_pet::setup::ensure_setup() {
             Ok(report) => {
@@ -346,46 +433,54 @@ fn main() {
                 by_tier.entry(pet.rarity).or_insert(pet);
                 id += 1;
             }
-            println!(
+            outln!(
                 "{}Galeria — um pet de cada tier (cor + sprite diferentes){}\n",
                 herdr_pet::render::DIM,
                 herdr_pet::render::RESET
             );
             for tier in order {
                 if let Some(pet) = by_tier.get(&tier) {
-                    println!(
+                    outln!(
                         "{}",
                         herdr_pet::render::render_casinha(pet, 0, herdr_pet::AgentStatus::Idle, None)
                     );
-                    println!();
+                    outln!();
                 }
             }
             if let Some(pet) = shiny {
-                println!("{}✨ Bônus: um SHINY{}\n", herdr_pet::render::BOLD, herdr_pet::render::RESET);
-                println!(
+                outln!("{}✨ Bônus: um SHINY{}\n", herdr_pet::render::BOLD, herdr_pet::render::RESET);
+                outln!(
                     "{}",
                     herdr_pet::render::render_casinha(&pet, 0, herdr_pet::AgentStatus::Idle, None)
                 );
-                println!();
+                outln!();
             }
             // Easter egg: Primordial exclusivo do criador (shiny iridescente; animado no `watch`)
             let primordial = hatch(herdr_pet::forge::FREDERICO_ID, 0);
-            println!(
+            outln!(
                 "{}✦ Primordial — exclusivo do criador (shiny iridescente){}\n",
                 herdr_pet::render::BOLD,
                 herdr_pet::render::RESET
             );
-            println!(
+            outln!(
                 "{}",
                 herdr_pet::render::render_casinha(&primordial, 0, herdr_pet::AgentStatus::Idle, None)
             );
         }
-        Cmd::Status => match herdr_pet::state::load() {
-            Some(s) => {
+        Cmd::Status => match herdr_pet::state::load_outcome() {
+            herdr_pet::state::LoadOutcome::Loaded(s) => {
                 print_pet(&hatch(s.github_id, s.active_index));
                 print_progress(&s);
             }
-            None => println!(
+            // O aviso detalhado (caminho + erro) já saiu no stderr do load.
+            // Sem sugerir `init`: ele vai RECUSAR enquanto o acesso não for corrigido.
+            herdr_pet::state::LoadOutcome::Unreadable => outln!(
+                "herdr-pet — state presente mas ilegível (permissão?). Corrija o acesso ao arquivo indicado acima e rode de novo."
+            ),
+            // `Corrupt`: o conteúdo já foi preservado em `.corrupt` e o init pode
+            // recriar com segurança — a orientação abaixo segue válida nos dois casos.
+            herdr_pet::state::LoadOutcome::Missing
+            | herdr_pet::state::LoadOutcome::Corrupt => outln!(
                 "herdr-pet — sem state ainda. Rode `herdr-pet init` ou abra o pane `watch` (auto-init)."
             ),
         },
@@ -393,20 +488,20 @@ fn main() {
 }
 
 fn print_pet(pet: &herdr_pet::Pet) {
-    println!("┌─ pet #{} ─────────────────────────────", pet.index);
-    println!("│ nome    : {}", pet.name);
-    println!(
+    outln!("┌─ pet #{} ─────────────────────────────", pet.index);
+    outln!("│ nome    : {}", pet.name);
+    outln!(
         "│ espécie : {}{}",
         pet.species.name,
         if pet.shiny { "  ✦ shiny" } else { "" }
     );
-    println!("│ tier    : {}", pet.rarity.as_title());
-    println!("│ HP/SP   : {} / {}", pet.stats.hp_max, pet.stats.sp_max);
-    println!(
+    outln!("│ tier    : {}", pet.rarity.as_title());
+    outln!("│ HP/SP   : {} / {}", pet.stats.hp_max, pet.stats.sp_max);
+    outln!(
         "│ stats   : ATK {} · DEF {} · SpA {} · SpD {} · SPE {}",
         pet.stats.atk, pet.stats.def, pet.stats.sp_atk, pet.stats.sp_def, pet.stats.speed
     );
-    println!(
+    outln!(
         "│ IV      : {}/{}/{}/{}/{}/{}  (hp/atk/def/spA/spD/spe, total {}/{})",
         pet.iv.hp,
         pet.iv.atk,
@@ -417,10 +512,10 @@ fn print_pet(pet: &herdr_pet::Pet) {
         pet.iv.total(),
         186,
     );
-    println!("│ âncora  : {}", pet.provenance.anchor);
-    println!("│ seed    : {}…", &pet.provenance.seed_hash[..12]);
-    println!("│ versão  : {}", pet.provenance.genesis_version);
-    println!("└──────────────────────────────────────────");
+    outln!("│ âncora  : {}", pet.provenance.anchor);
+    outln!("│ seed    : {}…", &pet.provenance.seed_hash[..12]);
+    outln!("│ versão  : {}", pet.provenance.genesis_version);
+    outln!("└──────────────────────────────────────────");
 }
 
 /// XP, nível e quem está working agora (inclui subagentes).
@@ -430,9 +525,9 @@ fn print_progress(state: &herdr_pet::state::State) {
 
     let lv = level_view(state.xp);
     let snap = herdr_pet::agent::snapshot(&herdr_pet::agent::all_agents_info());
-    println!("┌─ progresso ───────────────────────────");
+    outln!("┌─ progresso ───────────────────────────");
     if lv.xp_span > 0 {
-        println!(
+        outln!(
             "│ nível   : {BOLD}Nv {}{RESET}  {}  {}/{} XP",
             lv.level,
             bar(lv.xp_into as u16, lv.xp_span as u16, 10),
@@ -440,17 +535,17 @@ fn print_progress(state: &herdr_pet::state::State) {
             lv.xp_span,
         );
     } else {
-        println!("│ nível   : {BOLD}Nv 99 ★ máximo{RESET}");
+        outln!("│ nível   : {BOLD}Nv 99 ★ máximo{RESET}");
     }
-    println!("│ total   : {} XP", state.xp);
-    println!(
+    outln!("│ total   : {} XP", state.xp);
+    outln!(
         "│ agora   : {}",
         herdr_pet::agent::format_working_badge(snap.n_working, &snap.working_labels)
     );
     for title in snap.titles.iter().take(5) {
-        println!("{DIM}│           · {title}{RESET}");
+        outln!("{DIM}│           · {title}{RESET}");
     }
-    println!("└──────────────────────────────────────────");
+    outln!("└──────────────────────────────────────────");
 }
 
 /// Caminho do CLI `herdr`: HERDR_BIN_PATH → `herdr` no PATH → `~/.local/bin/herdr`.
@@ -498,12 +593,10 @@ fn resize_pet_height(bin: &str, pet: &str, dir: &str, amount: f64) -> Option<u64
         .and_then(|p| p["rect"]["height"].as_u64())
 }
 
-/// Acha o pane do pet (label "Pet") no workspace do pane focado, se existir.
-fn pet_pane_in_workspace() -> Result<Option<String>, String> {
+/// Acha os panes do pet (label "Pet") em QUALQUER workspace — devolve
+/// `(pane_id, workspace_id)` de cada um que existir.
+fn pet_panes() -> Result<Vec<(String, Option<String>)>, String> {
     let bin = herdr_bin();
-    // Prefer API focus (hotkey/action context) over HERDR_WORKSPACE_ID — the env
-    // can lag when `herdr-pet open` is called from another pane/workspace.
-    let ws = focused_workspace_id().or_else(|| std::env::var("HERDR_WORKSPACE_ID").ok());
     let out = std::process::Command::new(&bin)
         .args(["pane", "list"])
         .output()
@@ -511,17 +604,18 @@ fn pet_pane_in_workspace() -> Result<Option<String>, String> {
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_default();
     Ok(v["result"]["panes"]
         .as_array()
-        .and_then(|a| {
+        .map(|a| {
             a.iter()
-                .find(|p| {
-                    p.get("label").and_then(|l| l.as_str()) == Some("Pet")
-                        && match ws.as_deref() {
-                            Some(ws) => p.get("workspace_id").and_then(|w| w.as_str()) == Some(ws),
-                            None => true,
-                        }
+                .filter(|p| p.get("label").and_then(|l| l.as_str()) == Some("Pet"))
+                .filter_map(|p| {
+                    let pane_id = p["pane_id"].as_str()?.to_string();
+                    let ws =
+                        p.get("workspace_id").and_then(|w| w.as_str()).map(String::from);
+                    Some((pane_id, ws))
                 })
-                .and_then(|p| p["pane_id"].as_str().map(String::from))
-        }))
+                .collect()
+        })
+        .unwrap_or_default())
 }
 
 fn focused_workspace_id() -> Option<String> {
@@ -568,17 +662,21 @@ fn close_pet_with_farewell(bin: &str, pane: &str) {
         .unwrap_or(false);
 
     if sent {
+        // Gramática do herdr 0.8.0: `pane wait-output [OPTIONS] <PANE_ID>` SÓ
+        // aceita o pane ANTES das flags — com o pane no fim o parse devolve
+        // `unknown option: <needle>` (exit 2) e o wait nunca esperava nada
+        // (o `let _` engolia; o farewell sobrevivia só pelo hold abaixo).
         let _ = std::process::Command::new(bin)
             .args([
                 "pane",
                 "wait-output",
+                pane,
                 "--match",
                 herdr_pet::session::SUMMARY_NEEDLE,
                 "--source",
                 "visible",
                 "--timeout",
                 "2000",
-                pane,
             ])
             .output();
         // Um pouco menos que o hold do watch: fecha ainda com o quadro na tela.
@@ -600,28 +698,94 @@ fn notify_session(line: &str) {
         .output();
 }
 
-/// **Toggle** do pet (pro hotkey): se já existe um pane do pet neste workspace, fecha;
-/// senão abre como split pequeno dockado (~16 linhas) e refoca o pane original.
+/// **Toggle/move** do pet (pro hotkey). Regra: NUNCA dois panes Pet ao mesmo
+/// tempo — dois `watch` carregam cópias próprias do state e salvam o arquivo
+/// inteiro por cima um do outro (last-writer-wins perde XP e regredi as
+/// baselines de seq, que o próximo catch-up repaga). Então:
+/// - pet aberto NO workspace focado → fecha (toggle de sempre);
+/// - pet aberto em OUTRO workspace → "move": fecha o de lá (com farewell) e
+///   reabre aqui embaixo do pane focado — o pet acompanha o usuário pra onde
+///   ele foi trabalhar. Pré-condições do open (pane alvo) são resolvidas
+///   ANTES de fechar: se não há pra onde reabrir, o pet fica onde está —
+///   nunca fica sem pet nenhum por falha de API.
+///
+/// Limitação conhecida (deixada aberta por decisão): `herdr plugin pane open`
+/// chamado DIRETO (fora deste toggle) ainda pode criar um segundo watch. O
+/// lock tmp-com-pid no save reduz o dano a lost-update, sem corrupção; um
+/// lock de arquivo de verdade é follow-up.
 /// Leve — o `watch` só roda enquanto aberto.
 fn open_pet_small() -> Result<(), String> {
-    const PLUGIN_ID: &str = "allmight-ai.herdr-pet";
     let bin = herdr_bin();
 
-    // Toggle: pet já existe neste workspace → pede o resumo e só então fecha.
-    if let Some(existing) = pet_pane_in_workspace()? {
-        close_pet_with_farewell(&bin, &existing);
-        println!("✓ pet fechado ({existing}).");
-        return Ok(());
+    // Prefer API focus (hotkey/action context) over HERDR_WORKSPACE_ID — the env
+    // can lag when `herdr-pet open` is called from another pane/workspace.
+    let here = focused_workspace_id().or_else(|| std::env::var("HERDR_WORKSPACE_ID").ok());
+    let pets = pet_panes()?;
+
+    if !pets.is_empty() {
+        // Pet no workspace atual (ou workspace indeterminável de qualquer lado —
+        // sem como afirmar que é "outro") → comporta como toggle: fecha e pronto.
+        // Só decide "move" quando ambos os lados são conhecidos e diferentes.
+        let in_this_ws = pets.iter().any(|(_, ws)| match (&here, ws) {
+            (Some(h), Some(w)) => h == w,
+            _ => true,
+        });
+        if in_this_ws {
+            for (existing, _) in &pets {
+                close_pet_with_farewell(&bin, existing);
+            }
+            let ids: Vec<&str> = pets.iter().map(|(id, _)| id.as_str()).collect();
+            outln!("✓ pet fechado ({}).", ids.join(", "));
+            return Ok(());
+        }
     }
 
-    // pane alvo = o focado (via API — mais robusto que a env var HERDR_PANE_ID)
-    let target = focused_pane()?;
+    // pane alvo = o focado (via API — mais robusto que a env var HERDR_PANE_ID).
+    // No braço move isso roda ANTES de fechar o pet existente: sem alvo pra
+    // reabrir, o pet fica onde está (erro impresso) em vez de sumir dos dois.
+    let target = match focused_pane() {
+        Ok(t) => t,
+        Err(e) if !pets.is_empty() => {
+            outln!(
+                "! não movi o pet: sem pane pra reabrir aqui ({e}) — ele segue aberto onde estava."
+            );
+            return Ok(());
+        }
+        Err(e) => return Err(e),
+    };
+
+    if !pets.is_empty() {
+        // Move: agora que o alvo está garantido, fecha o pet do outro workspace
+        // (com farewell) e reabre aqui embaixo.
+        let from: Vec<String> = pets
+            .iter()
+            .map(|(id, ws)| match ws {
+                Some(w) => format!("{id} ({w})"),
+                None => id.clone(),
+            })
+            .collect();
+        outln!(
+            "✓ pet movido pra cá (fechando {} em outro workspace); reabrindo…",
+            from.join(", ")
+        );
+        for (existing, _) in &pets {
+            close_pet_with_farewell(&bin, existing);
+        }
+    }
+
+    open_pet_split(&bin, &target)
+}
+
+/// Passos pós-decisão do `open`: cria o pane do pet dockado embaixo do
+/// `target`, ajeita a altura pra banda [16,18] e refoca o pane original.
+fn open_pet_split(bin: &str, target: &str) -> Result<(), String> {
+    const PLUGIN_ID: &str = "allmight-ai.herdr-pet";
 
     // 1) abre o pet dockado abaixo do pane atual (split)
-    let out = std::process::Command::new(&bin)
+    let out = std::process::Command::new(bin)
         .args([
             "plugin", "pane", "open", "--plugin", PLUGIN_ID, "--entrypoint", "lcd",
-            "--placement", "split", "--target-pane", &target, "--direction", "down",
+            "--placement", "split", "--target-pane", target, "--direction", "down",
         ])
         .output()
         .map_err(|e| format!("não consegui rodar `herdr`: {e}"))?;
@@ -635,23 +799,23 @@ fn open_pet_small() -> Result<(), String> {
     // 2) ajeita o tamanho na banda [16,18]: encolhe se >18, cresce se <16.
     //    Abaixo de 16 o topo (nome) rola fora da viewport pequena.
     for _ in 0..20 {
-        match resize_pet_height(&bin, &pet, "down", 0.02) {
+        match resize_pet_height(bin, &pet, "down", 0.02) {
             Some(h) if h > 18 => {}
             _ => break,
         }
     }
     for _ in 0..24 {
-        match resize_pet_height(&bin, &pet, "up", 0.04) {
+        match resize_pet_height(bin, &pet, "up", 0.04) {
             Some(h) if h < 16 => {}
             _ => break,
         }
     }
 
     // 3) refoca o pane original (vizinho de cima do pet)
-    let _ = std::process::Command::new(&bin)
+    let _ = std::process::Command::new(bin)
         .args(["pane", "focus", "--pane", &pet, "--direction", "up"])
         .output();
 
-    println!("✓ pet aberto ({pet}) — dockado embaixo. Ctrl+C fecha · redimensionar: prefix+r");
+    outln!("✓ pet aberto ({pet}) — dockado embaixo. Ctrl+C fecha · redimensionar: prefix+r");
     Ok(())
 }

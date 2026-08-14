@@ -45,7 +45,7 @@ O `watch` agrega **todos** os agentes (`herdr agent list`) e anima o mood: se qu
 
 A tarefa exibida é o `terminal_title` de um agente que trabalha (rotacionando entre eles se houver vários, ~4 s cada); ou do focado, se ninguém trabalha. Rodapé: `⚙ 2 grok, claude` = quem está `working` agora; `⚙ 0` se ninguém. Humor e conta saem do mesmo filtro (dormindo ⇒ zero). Detecção via Screen Manifest do Herdr; o agente precisa estar num pane nativo (sem tmux aninhado).
 
-O `herdr-pet status` (no shell, sem o pane aberto) mostra identidade, nível, barra de XP e a mesma lista de quem está working. Sem `HERDR_PLUGIN_STATE_DIR`, lê o state do Herdr em `~/.local/state/herdr/plugins/allmight-ai.herdr-pet/`.
+O `herdr-pet status` (no shell, sem o pane aberto) mostra identidade, nível, barra de XP e a mesma lista de quem está working. Resolução do state (`state::resolve_state_dir`), nesta ordem: 1) `HERDR_PLUGIN_STATE_DIR` (pane); 2) dir XDG do plugin (`~/.local/state/herdr/plugins/allmight-ai.herdr-pet/`) se já tem `state.json`; 3) `.herdr-pet-state/` do CWD, só se já existir (compat com dev antigo — nunca criado implicitamente); 4) dir XDG do plugin como padrão de **escrita** (`init`/`save` criam) — um state só, sem fork de âncora. A gravação é atômica (tmp+fsync+rename) e um arquivo ilegível é preservado em `state.json.corrupt`, com aviso no stderr, antes de o auto-init recriar.
 
 ## Deployment
 

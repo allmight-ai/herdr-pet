@@ -1,7 +1,7 @@
 //! Resolve a âncora GitHub e aplica o **lock-in**: a 1ª conta vista trava, e trocar
 //! de conta depois NÃO rerolla o pet (a raridade fica presa à identidade original).
 
-use crate::state::{self, State};
+use crate::state::{self, LoadOutcome, State};
 
 /// Lê o ID numérico do usuário via `gh api user --jq .id`.
 pub fn resolve_github_id() -> Result<u64, String> {
@@ -24,13 +24,25 @@ pub fn resolve_github_id() -> Result<u64, String> {
 ///
 /// - Se já existe state → **reusa** a âncora gravada (lock-in; trocar de conta
 ///   GitHub não rerolla).
-/// - Se não existe → resolve do `gh`, cria o state e persiste.
+/// - Se não existe (ou é ilegível mas o conteúdo já foi preservado em
+///   `.corrupt`) → resolve do `gh`, cria o state e persiste.
+/// - Se existe mas **não dá nem pra ler os bytes** (ex.: permissão) → ERRO sem
+///   tocar em nada: recriar por cima destruiria dados que não foram preservados.
 pub fn ensure_locked_state() -> Result<State, String> {
-    if let Some(existing) = state::load() {
-        return Ok(existing);
+    match state::load_outcome() {
+        LoadOutcome::Loaded(existing) => Ok(existing),
+        // `Missing`: não há state. `Corrupt`: o conteúdo antigo já está salvo em
+        // `.corrupt` — recriar por cima é seguro nos dois casos.
+        LoadOutcome::Missing | LoadOutcome::Corrupt => {
+            let id = resolve_github_id()?;
+            let s = State::new(id);
+            state::save(&s).map_err(|e| format!("erro ao salvar state: {}", e))?;
+            Ok(s)
+        }
+        LoadOutcome::Unreadable => Err(format!(
+            "state existe em {} mas não pôde ser lido (permissão?) — nada foi alterado; \
+             corrija o acesso ao arquivo antes de recriar",
+            state::state_path().display()
+        )),
     }
-    let id = resolve_github_id()?;
-    let s = State::new(id);
-    state::save(&s).map_err(|e| format!("erro ao salvar state: {}", e))?;
-    Ok(s)
 }

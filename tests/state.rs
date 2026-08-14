@@ -63,7 +63,10 @@ fn state_com_xp_faz_roundtrip_e_deriva_nivel() {
 fn apply_catchup_primeira_vista_nao_credita_historico() {
     // State novo: a 1ª vista de cada pane trava baseline, sem creditar histórico.
     let mut s = State::new(1);
-    let gained = s.apply_catchup(&[PaneSeq { pane_id: "w1:p1".into(), seq: 57 }]);
+    let gained = s.apply_catchup(&[PaneSeq {
+        pane_id: "w1:p1".into(),
+        seq: 57,
+    }]);
     assert_eq!(gained, 0);
     assert_eq!(s.xp, 0);
     assert_eq!(s.last_seq_by_pane.get("w1:p1"), Some(&57));
@@ -72,8 +75,14 @@ fn apply_catchup_primeira_vista_nao_credita_historico() {
 #[test]
 fn apply_catchup_credita_delta_de_um_agente() {
     let mut s = State::new(1);
-    s.apply_catchup(&[PaneSeq { pane_id: "w1:p1".into(), seq: 100 }]); // baseline
-    let gained = s.apply_catchup(&[PaneSeq { pane_id: "w1:p1".into(), seq: 150 }]); // delta 50
+    s.apply_catchup(&[PaneSeq {
+        pane_id: "w1:p1".into(),
+        seq: 100,
+    }]); // baseline
+    let gained = s.apply_catchup(&[PaneSeq {
+        pane_id: "w1:p1".into(),
+        seq: 150,
+    }]); // delta 50
     assert_eq!(gained, herdr_pet::progression::xp_for_catchup(50));
     assert_eq!(s.last_seq_by_pane.get("w1:p1"), Some(&150));
 }
@@ -83,16 +92,62 @@ fn apply_catchup_multiplos_agentes_aplica_curva_harmonica() {
     // 2 agentes, cada um delta 50: linear = 2×xp_for_catchup(50); curva H(2)/2 = 0,75.
     let mut s = State::new(1);
     s.apply_catchup(&[
-        PaneSeq { pane_id: "w1:p1".into(), seq: 100 },
-        PaneSeq { pane_id: "w2:p2".into(), seq: 200 },
+        PaneSeq {
+            pane_id: "w1:p1".into(),
+            seq: 100,
+        },
+        PaneSeq {
+            pane_id: "w2:p2".into(),
+            seq: 200,
+        },
     ]);
     let gained = s.apply_catchup(&[
-        PaneSeq { pane_id: "w1:p1".into(), seq: 150 },
-        PaneSeq { pane_id: "w2:p2".into(), seq: 250 },
+        PaneSeq {
+            pane_id: "w1:p1".into(),
+            seq: 150,
+        },
+        PaneSeq {
+            pane_id: "w2:p2".into(),
+            seq: 250,
+        },
     ]);
     let linear = 2 * herdr_pet::progression::xp_for_catchup(50);
+    // Ganhos iguais: Σ g/i = linear·H(2)/2 = o valor antigo (225).
     assert_eq!(gained, linear * 750 / 1000);
     assert!(gained < linear, "a curva tem que reduzir vs linear");
+}
+
+#[test]
+fn apply_catchup_tick_pequeno_nao_taxa_o_worker() {
+    // C7: worker delta 100 (300 XP) + idle delta 1 (3 XP) não pode virar 227.
+    // Peso por ganho, maior primeiro: 300×1 + 3×½ = 301.
+    let mut s = State::new(1);
+    s.apply_catchup(&[
+        PaneSeq {
+            pane_id: "worker".into(),
+            seq: 10,
+        },
+        PaneSeq {
+            pane_id: "idle".into(),
+            seq: 1,
+        },
+    ]);
+    let gained = s.apply_catchup(&[
+        PaneSeq {
+            pane_id: "worker".into(),
+            seq: 110,
+        },
+        PaneSeq {
+            pane_id: "idle".into(),
+            seq: 2,
+        },
+    ]);
+    let worker = herdr_pet::progression::xp_for_catchup(100);
+    let idle = herdr_pet::progression::xp_for_catchup(1);
+    assert_eq!(worker, 300);
+    assert_eq!(idle, 3);
+    assert_eq!(gained, 301, "300 + 3/2, não 227 da taxa H(2)/n na soma");
+    assert!(gained >= worker, "o worker não pode perder XP pro flicker");
 }
 
 #[test]
@@ -100,10 +155,19 @@ fn apply_catchup_pane_duplicado_nao_gera_xp_fantasma() {
     // Mesmo pane 2× (ex.: pane_id ausente → ""): conta UMA vez (maior delta), sem um
     // agente ler o insert do outro dentro da mesma chamada e gerar XP fantasma.
     let mut s = State::new(1);
-    s.apply_catchup(&[PaneSeq { pane_id: "w1:p1".into(), seq: 100 }]); // baseline
+    s.apply_catchup(&[PaneSeq {
+        pane_id: "w1:p1".into(),
+        seq: 100,
+    }]); // baseline
     let gained = s.apply_catchup(&[
-        PaneSeq { pane_id: "w1:p1".into(), seq: 150 },
-        PaneSeq { pane_id: "w1:p1".into(), seq: 200 },
+        PaneSeq {
+            pane_id: "w1:p1".into(),
+            seq: 150,
+        },
+        PaneSeq {
+            pane_id: "w1:p1".into(),
+            seq: 200,
+        },
     ]);
     // Só o maior delta (200−100) conta; o segundo registro não dobra nem vira fantasma.
     assert_eq!(gained, herdr_pet::progression::xp_for_catchup(100));
@@ -125,4 +189,341 @@ fn record_seen_seq_avanca_baseline_sem_creditar() {
         seq: 160,
     }]);
     assert_eq!(gained, herdr_pet::progression::xp_for_catchup(10));
+}
+
+#[test]
+fn record_seen_seq_mesmo_tick_fica_com_o_maior() {
+    // Dois valores no mesmo slice: o maior é o observado deste tick.
+    // O 0 *espúrio* (campo omitido) não chega aqui — snapshot descarta.
+    let mut s = State::new(1);
+    s.record_seen_seq(&[PaneSeq {
+        pane_id: "w1:p1".into(),
+        seq: 150,
+    }]);
+    s.record_seen_seq(&[
+        PaneSeq {
+            pane_id: "w1:p1".into(),
+            seq: 150,
+        },
+        PaneSeq {
+            pane_id: "w1:p1".into(),
+            seq: 0,
+        },
+    ]);
+    assert_eq!(s.last_seq_by_pane.get("w1:p1"), Some(&150));
+    let gained = s.apply_catchup(&[PaneSeq {
+        pane_id: "w1:p1".into(),
+        seq: 150,
+    }]);
+    assert_eq!(gained, 0, "seq já visto neste teto não gera XP");
+    assert_eq!(s.xp, 0);
+}
+
+#[test]
+fn apply_catchup_reset_genuino_rebobina_sem_creditar_nesse_tick() {
+    // 0 real (Herdr reiniciou / pane_id reusado) rebobina a baseline.
+    // Este tick: 0 XP. O próximo delta conta a partir do novo zero.
+    // Replay de campo omitido (200→ausente→200) não acontece: o snapshot
+    // não emite PaneSeq sem seq, então o 0 espúrio nunca chega aqui.
+    let mut s = State::new(1);
+    assert_eq!(
+        s.apply_catchup(&[PaneSeq {
+            pane_id: "p".into(),
+            seq: 200
+        }]),
+        0
+    );
+    assert_eq!(
+        s.apply_catchup(&[PaneSeq {
+            pane_id: "p".into(),
+            seq: 0
+        }]),
+        0,
+        "reset não credita neste tick"
+    );
+    assert_eq!(s.last_seq_by_pane.get("p"), Some(&0));
+    let gained = s.apply_catchup(&[PaneSeq {
+        pane_id: "p".into(),
+        seq: 40,
+    }]);
+    assert_eq!(gained, herdr_pet::progression::xp_for_catchup(40));
+    assert_eq!(s.last_seq_by_pane.get("p"), Some(&40));
+}
+
+// --- C12: eviction de panes ausentes no catch-up ---
+
+#[test]
+fn apply_catchup_mantem_baseline_dos_panes_presentes() {
+    // Quem aparece na observação corrente mantém/atualiza a baseline normalmente.
+    let mut s = State::new(1);
+    s.apply_catchup(&[
+        PaneSeq {
+            pane_id: "w1:pA".into(),
+            seq: 100,
+        },
+        PaneSeq {
+            pane_id: "w2:pB".into(),
+            seq: 200,
+        },
+    ]);
+    s.apply_catchup(&[
+        PaneSeq {
+            pane_id: "w1:pA".into(),
+            seq: 150,
+        },
+        PaneSeq {
+            pane_id: "w2:pB".into(),
+            seq: 250,
+        },
+    ]);
+    assert_eq!(s.last_seq_by_pane.get("w1:pA"), Some(&150));
+    assert_eq!(s.last_seq_by_pane.get("w2:pB"), Some(&250));
+}
+
+#[test]
+fn apply_catchup_evicta_pane_ausente_e_subagente_morto() {
+    // Pane fechado e subagente sintético (pai:filho) que encerrou não deixam
+    // slot eterno: quem não veio na observação corrente sai do mapa.
+    let mut s = State::new(1);
+    s.apply_catchup(&[
+        PaneSeq {
+            pane_id: "w1:pA".into(),
+            seq: 100,
+        },
+        PaneSeq {
+            pane_id: "w2:pMORREU".into(),
+            seq: 50,
+        },
+        PaneSeq {
+            pane_id: "w16:p5:abc-sub".into(),
+            seq: 30,
+        },
+    ]);
+    // Reabertura só com o pane vivo:
+    s.apply_catchup(&[PaneSeq {
+        pane_id: "w1:pA".into(),
+        seq: 120,
+    }]);
+    assert_eq!(s.last_seq_by_pane.len(), 1, "só o pane presente sobrevive");
+    assert!(s.last_seq_by_pane.contains_key("w1:pA"));
+    assert!(!s.last_seq_by_pane.contains_key("w2:pMORREU"), "pane morto evictado");
+    assert!(
+        !s.last_seq_by_pane.contains_key("w16:p5:abc-sub"),
+        "subagente sintético morto evictado"
+    );
+}
+
+#[test]
+fn pane_vivo_ausente_numa_abertura_nao_credita_historico_na_volta() {
+    // Direção da segurança: pane vivo que pisco fora da observação perde a
+    // baseline; na volta é PRIMEIRA-VISTA — 0 XP de histórico, só re-baseline.
+    // No máximo subconta; nunca infla.
+    let mut s = State::new(1);
+    s.apply_catchup(&[PaneSeq {
+        pane_id: "w1:pA".into(),
+        seq: 100,
+    }]);
+    // Abertura em que ele não veio (flicker/pane fechado em outra sessão):
+    s.apply_catchup(&[PaneSeq {
+        pane_id: "w9:pOUTRO".into(),
+        seq: 10,
+    }]);
+    assert!(s.last_seq_by_pane.get("w1:pA").is_none(), "foi evictado");
+    // Volta com 200 de seq — SEM crédito dos 100 "perdidos":
+    let gained = s.apply_catchup(&[PaneSeq {
+        pane_id: "w1:pA".into(),
+        seq: 200,
+    }]);
+    assert_eq!(gained, 0, "primeira-vista: sem crédito histórico");
+    assert_eq!(s.last_seq_by_pane.get("w1:pA"), Some(&200));
+    // E o XP seguinte conta a partir da baseline nova:
+    let gained = s.apply_catchup(&[PaneSeq {
+        pane_id: "w1:pA".into(),
+        seq: 210,
+    }]);
+    assert_eq!(gained, herdr_pet::progression::xp_for_catchup(10));
+}
+
+#[test]
+fn apply_catchup_com_observacao_vazia_nao_apaga_o_mapa() {
+    // `herdr agent list` falhou na abertura (server recarregando, binário fora
+    // do PATH) → snapshot vazio. Sem a guarda, o retain limparia o mapa INTEIRO
+    // e o gate de save persistiria o apagamento — todas as baselines perdidas.
+    let mut s = State::new(1);
+    s.apply_catchup(&[
+        PaneSeq {
+            pane_id: "w1:pA".into(),
+            seq: 100,
+        },
+        PaneSeq {
+            pane_id: "w2:pB".into(),
+            seq: 40,
+        },
+    ]);
+    let xp_antes = s.xp;
+    assert_eq!(s.apply_catchup(&[]), 0, "sem observação não há ganho");
+    assert_eq!(
+        s.last_seq_by_pane.len(),
+        2,
+        "observação vazia NÃO evicta o mapa"
+    );
+    assert_eq!(s.last_seq_by_pane.get("w1:pA"), Some(&100));
+    assert_eq!(s.last_seq_by_pane.get("w2:pB"), Some(&40));
+    assert_eq!(s.xp, xp_antes);
+    // Recuperado o poll, o catch-up seguinte credita o delta inteiro — as
+    // baselines sobreviveram à falha.
+    let gained = s.apply_catchup(&[PaneSeq {
+        pane_id: "w1:pA".into(),
+        seq: 160,
+    }]);
+    assert_eq!(gained, herdr_pet::progression::xp_for_catchup(60));
+}
+
+#[test]
+fn record_seen_seq_nao_evicta_pane_ausente() {
+    // O poll NÃO evicta: pane vivo que pisco fora de um snapshot intermediário
+    // não pode perder a baseline por flicker — senão a próxima observação dele
+    // viraria primeira-vista à toa (perda de catch-up legítimo).
+    let mut s = State::new(1);
+    s.apply_catchup(&[PaneSeq {
+        pane_id: "w1:pA".into(),
+        seq: 100,
+    }]);
+    s.record_seen_seq(&[PaneSeq {
+        pane_id: "w2:pB".into(),
+        seq: 5,
+    }]); // pA sumiu deste poll
+    assert_eq!(
+        s.last_seq_by_pane.get("w1:pA"),
+        Some(&100),
+        "poll não evicta"
+    );
+    // O trabalho de pA durante o pane aberto ainda vira catch-up? Não — mas a
+    // baseline segue coerente pro próximo catch-up contar o delta real.
+    let gained = s.apply_catchup(&[
+        PaneSeq {
+            pane_id: "w1:pA".into(),
+            seq: 160,
+        },
+        PaneSeq {
+            pane_id: "w2:pB".into(),
+            seq: 5,
+        },
+    ]);
+    assert_eq!(gained, herdr_pet::progression::xp_for_catchup(60));
+}
+
+// --- C9: corrupção preservada, save atômico ---
+
+#[test]
+fn state_truncado_vira_none_e_preserva_corrupt() {
+    // Ilegível ⇒ None (auto-init pode recriar), MAS o conteúdo é preservado em
+    // `<path>.corrupt` antes de qualquer coisa — nunca destruído em silêncio.
+    let path = tmp("corrupt");
+    let original =
+        r#"{"anchor":"github:1","github_id":1,"active_index":0,"hatched":[0],"xp":48000,"last"#;
+    std::fs::write(&path, original).unwrap();
+    assert!(load_from(&path).is_none());
+    let corrupt = PathBuf::from(format!("{}.corrupt", path.display()));
+    assert!(corrupt.is_file(), "cópia .corrupt criada");
+    assert_eq!(
+        std::fs::read_to_string(&corrupt).unwrap(),
+        original,
+        "cópia .corrupt com o conteúdo original"
+    );
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&corrupt);
+}
+
+#[test]
+fn corrupt_repetido_nao_empilha_copia_identica() {
+    // Rodar `status` N vezes no mesmo arquivo quebrado não pode gerar N cópias
+    // iguais (.corrupt, .1, .2, …): carga repetida reutiliza a preserva idêntica.
+    // Conteúdo DIFERENTE empilha (preserva anterior fica intacta).
+    let path = tmp("corrupt-dedup");
+    let a = r#"{"anchor":"github:1","github_id":1,"active_index":0,"hatched":[0],"xp":1,"la"#;
+    std::fs::write(&path, a).unwrap();
+    for _ in 0..3 {
+        assert!(load_from(&path).is_none());
+    }
+    let c0 = PathBuf::from(format!("{}.corrupt", path.display()));
+    let c1 = PathBuf::from(format!("{}.corrupt.1", path.display()));
+    assert!(c0.is_file());
+    assert!(!c1.exists(), "cópia idêntica não empilha");
+    assert_eq!(std::fs::read_to_string(&c0).unwrap(), a);
+    // Quebra DIFERENTE no state.json → essa sim empilha (.corrupt.1).
+    let b = r#"{"anchor":"github:2","outra-quebra""#;
+    std::fs::write(&path, b).unwrap();
+    assert!(load_from(&path).is_none());
+    assert!(c1.is_file(), "conteúdo diferente empilha");
+    assert_eq!(
+        std::fs::read_to_string(&c1).unwrap(),
+        b,
+        "preserva nova com o conteúdo novo"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&c0).unwrap(),
+        a,
+        "preserva anterior intacta"
+    );
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&c0);
+    let _ = std::fs::remove_file(&c1);
+}
+
+#[test]
+fn save_to_nao_deixa_tmp_e_produz_arquivo_valido() {
+    // Atômico (tmp+fsync+rename): depois do save não sobra tmp (com o PID no
+    // nome) e o arquivo carrega.
+    let path = tmp("atomic");
+    let s = State::new(3);
+    save_to(&path, &s).unwrap();
+    assert!(
+        !path
+            .with_extension(format!("tmp-herdr-pet-{}", std::process::id()))
+            .exists(),
+        "sem tmp lixo"
+    );
+    assert_eq!(load_from(&path).unwrap().github_id, 3);
+    let _ = std::fs::remove_file(&path);
+}
+
+// --- C9 rodada 2: ausente ≠ ilegível-sem-ler ≠ corrompido ---
+
+#[test]
+fn state_ausente_e_missing_nao_unreadable() {
+    use herdr_pet::state::{load_from_outcome, LoadOutcome};
+    let path = tmp("nunca-criado");
+    match load_from_outcome(&path) {
+        LoadOutcome::Missing => {}
+        other => panic!("arquivo ausente deveria ser Missing, veio {other:?}"),
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn state_sem_permissao_e_unreadable_e_o_conteudo_sobrevive() {
+    // Modo 000: não dá nem pra LER os bytes — não há como preservar, então o
+    // sinal é "não recrie por cima". Nada é gravado; o conteúdo intacto volta
+    // quando o acesso é corrigido.
+    use std::os::unix::fs::PermissionsExt;
+    use herdr_pet::state::{load_from_outcome, LoadOutcome};
+    let path = tmp("modo000");
+    std::fs::write(
+        &path,
+        r#"{"anchor":"github:1","github_id":1,"active_index":0,"hatched":[0],"xp":48000,"last_seq_by_pane":{}}"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+    match load_from_outcome(&path) {
+        LoadOutcome::Unreadable => {}
+        other => panic!("modo 000 deveria ser Unreadable, veio {other:?}"),
+    }
+    assert!(load_from(&path).is_none(), "compat Option continua None");
+    // Nenhum .corrupt foi criado (não havia bytes pra preservar)…
+    assert!(!PathBuf::from(format!("{}.corrupt", path.display())).exists());
+    // …e o arquivo segue INTACTO — corrigindo a permissão, os 48.000 XP estão lá.
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(load_from(&path).unwrap().xp, 48_000);
+    let _ = std::fs::remove_file(&path);
 }
