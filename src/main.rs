@@ -144,8 +144,13 @@ fn main() {
             let _ = ctrlc::set_handler(move || {
                 r.store(false, Ordering::SeqCst);
             });
-            print!("\x1b[?1049h"); // alternate screen buffer
-            let _ = std::io::stdout().flush();
+            // Handle de stdout com erro IGNORADO em todo o caminho do watch: pane
+            // destruído sem Ctrl+C mata a PTY e `print!` PANICA quando a escrita
+            // falha — o panic pularia o save final (perda de até ~30s de XP).
+            // `let _ = write!` deixa o processo morrer em paz, save incluído.
+            let mut out = std::io::stdout().lock();
+            let _ = write!(out, "\x1b[?1049h"); // alternate screen buffer
+            let _ = out.flush();
 
             // Otimização: o pet é imutável pra (gid, idx) — forja UMA vez, cacheia.
             let pet = hatch(gid, idx);
@@ -190,6 +195,8 @@ fn main() {
             // save (clone só ao salvar) e comparamos só quando o gate de frame passa
             // (~a cada 30s).
             let mut last_save_frame = 0u32;
+            // true = o último save tentado falhou (marcador `⚠ save` no rodapé).
+            let mut save_failing = false;
             const SAVE_EVERY_FRAMES: u32 = 36; // ~30s (ciclo ~0,8s)
             const TITLE_ROTATION_FRAMES: u32 = 5; // ~4s por tarefa quando há vários working
 
@@ -240,6 +247,12 @@ fn main() {
                 let lv = level_view(state.xp);
                 let period = herdr_pet::render::animation_period(status, &pet);
                 let badge = herdr_pet::agent::format_working_badge(n_working, &working_labels);
+                // Sinal de save falho, NÃO-SPAM: `· ⚠ save` fica no rodapé enquanto
+                // o último save tiver falhado e some no primeiro que passa. Sinal
+                // por transição (entra no sig como string): liga/desliga ⇒ um
+                // redraw; falha persistente não redesenha nada por frame. Nada de
+                // eprintln no loop — sujaria o LCD.
+                let footer = if save_failing { format!("{badge} · ⚠ save") } else { badge };
                 let sig = (
                     status,
                     frame % period,
@@ -247,29 +260,32 @@ fn main() {
                     lv.level,
                     lv.xp_into,
                     n_working,
-                    badge.clone(),
+                    footer.clone(),
                 );
                 if last_sig.as_ref() != Some(&sig) {
-                    print!("\x1b[H\x1b[J"); // topo + limpa até o fim (sem scrollar)
-                    println!(
+                    let _ = write!(out, "\x1b[H\x1b[J"); // topo + limpa até o fim (sem scrollar)
+                    let _ = writeln!(
+                        out,
                         "{}",
                         herdr_pet::render::render_casinha(&pet, frame, status, title.as_deref())
                     );
-                    println!();
+                    let _ = writeln!(out);
                     if lv.xp_span > 0 {
-                        println!(
-                            "{DIM}#{idx} · {BOLD}Nv {}{RESET}{DIM} · {RESET}{}{DIM} {}/{} XP · {badge}{RESET}",
+                        let _ = writeln!(
+                            out,
+                            "{DIM}#{idx} · {BOLD}Nv {}{RESET}{DIM} · {RESET}{}{DIM} {}/{} XP · {footer}{RESET}",
                             lv.level,
                             bar(lv.xp_into as u16, lv.xp_span as u16, 10),
                             lv.xp_into,
                             lv.xp_span,
                         );
                     } else {
-                        println!(
-                            "{DIM}#{idx} · {BOLD}Nv 99 ★ máximo{RESET}{DIM} · {badge} · Ctrl+C{RESET}",
+                        let _ = writeln!(
+                            out,
+                            "{DIM}#{idx} · {BOLD}Nv 99 ★ máximo{RESET}{DIM} · {footer} · Ctrl+C{RESET}",
                         );
                     }
-                    let _ = std::io::stdout().flush();
+                    let _ = out.flush();
                     last_sig = Some(sig);
                 }
 
@@ -280,10 +296,21 @@ fn main() {
                     && frame.wrapping_sub(last_save_frame) >= SAVE_EVERY_FRAMES
                     && (state.xp != last_saved_xp || state.last_seq_by_pane != last_saved_seqs)
                 {
-                    if herdr_pet::state::save(&state).is_ok() {
-                        last_saved_xp = state.xp;
-                        last_saved_seqs = state.last_seq_by_pane.clone();
-                        last_save_frame = frame;
+                    match herdr_pet::state::save(&state) {
+                        Ok(()) => {
+                            last_saved_xp = state.xp;
+                            last_saved_seqs = state.last_seq_by_pane.clone();
+                            last_save_frame = frame;
+                            save_failing = false; // marcador some no primeiro save que passa
+                        }
+                        // Falha deixa de ser silenciosa: acende `⚠ save` no rodapé.
+                        // `last_save_frame` anda TAMBÉM na falha — retry no mesmo
+                        // ritmo ~30s, sem martelar disco a cada frame (~0,8s) se o
+                        // estado persistir (ex.: fs read-only).
+                        Err(_) => {
+                            save_failing = true;
+                            last_save_frame = frame;
+                        }
                     }
                 }
 
@@ -298,11 +325,15 @@ fn main() {
             }
 
             // Save final na saída (Ctrl+C / SIGHUP do toggle) — não perde o progresso
-            // (XP ou baselines de seq ainda não salvos).
+            // (XP ou baselines de seq ainda não salvos). Roda ANTES de qualquer
+            // print do farewell e independe do stdout estar vivo (pane pode ter
+            // sido destruído — os prints abaixo ignoram erro justamente por isso).
             if persist
                 && (state.xp != last_saved_xp || state.last_seq_by_pane != last_saved_seqs)
             {
-                let _ = herdr_pet::state::save(&state);
+                if herdr_pet::state::save(&state).is_err() {
+                    save_failing = true;
+                }
             }
 
             let summary = session.summarize(state.xp, state.level());
@@ -316,21 +347,30 @@ fn main() {
             } else {
                 status
             };
-            print!("\x1b[H\x1b[J");
-            println!(
+            let _ = write!(out, "\x1b[H\x1b[J");
+            let _ = writeln!(
+                out,
                 "{}",
                 herdr_pet::render::render_casinha(&pet, frame, goodbye, None)
             );
-            println!();
-            println!("{BOLD}{line}{RESET}");
-            let _ = std::io::stdout().flush();
+            let _ = writeln!(out);
+            let _ = writeln!(out, "{BOLD}{line}{RESET}");
+            if save_failing {
+                // Última chance de avisar: o save final também falhou — o XP da
+                // sessão não chegou ao disco (o rodapé `⚠ save` morreu com o pane).
+                let _ = writeln!(
+                    out,
+                    "{DIM}⚠ save falhou — progresso não gravado no disco{RESET}"
+                );
+            }
+            let _ = out.flush();
             std::thread::sleep(std::time::Duration::from_millis(
                 herdr_pet::session::FAREWELL_MS,
             ));
 
-            print!("\x1b[?1049l"); // restaura o buffer principal
-            println!("{line}");
-            let _ = std::io::stdout().flush();
+            let _ = write!(out, "\x1b[?1049l"); // restaura o buffer principal
+            let _ = writeln!(out, "{line}");
+            let _ = out.flush();
         }
         Cmd::Setup { quiet } => match herdr_pet::setup::ensure_setup() {
             Ok(report) => {
