@@ -4,6 +4,46 @@ Todas as mudanças notáveis deste projeto serão documentadas aqui.
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/)
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.4.0] - 2026-08-14
+
+Release da caça de bugs orquestrada (PR #3, 27 commits): 4 caçadores de IA em
+panes do Herdr + revisor adversarial, processo documentado em
+`docs/caca-de-bugs-orquestrada.md`.
+
+### Fixed
+- **Anti-cheat (P0)**: `watch --mood` creditava ~1000 XP/h no state real sem
+  nenhum agente; baseline de seq rebobinada pagava replay de catch-up (até
+  6.000 XP/pane por reabertura — raiz: `serde(default)` confundia campo ausente
+  com `0`/`""`); filho Grok casado por cwd contava uma vez por pai `working`.
+- **Detecção**: encode do Claude não sanitizava `.`/`_` (projetos com ponto no
+  path perdiam filhos); filhos GLM invisíveis (fallback disciplinado com janela
+  de 120 s e roots separados); filho morto no meio da tool virava fantasma
+  eterno (staleness por mtime, tools paralelas cobertas); rodapé `⚙ N`
+  congelava os nomes da abertura.
+- **Persistência**: save não atômico + corrupção tratada como ausência =
+  reset silencioso de todo o XP (agora tmp+fsync+rename por pid, `.corrupt`
+  preservado, state ilegível recusa recriação); `init` fora do pane criava
+  state órfão no CWD (fork de âncora); dois `watch` disputavam o `state.json`
+  (nunca dois panes Pet: toggle/move); baselines cresciam sem eviction.
+- **Watch/CLI**: PTY morta panicava antes do save final (perdia até ~30 s de
+  XP); `status | head` saía 101 (broken pipe); falha de save era 100% silenciosa
+  (agora `⚠ save` no rodapé + retry a ~30 s); o `pane wait-output` do farewell
+  **nunca funcionou** (argv na ordem que o herdr 0.8.0 rejeita) — o toggle
+  fechava só pelo hold.
+- **Progressão**: um tick idle de 1 seq taxava o worker em até 73 XP no
+  catch-up (peso harmônico agora é por contribuinte, top-8, alinhado ao live);
+  resumo da sessão dizia "0 agentes · +N XP" em catch-up puro (agora
+  `recuperado: +N XP`) e superestimava agentes quando ids chegavam depois.
+
+### Changed
+- `watch --mood` virou modo dev **só-leitura**: nunca grava state nem ganha XP;
+  sem state, exige `--id`.
+- Resolução do state dir em 4 passos documentados; o dir XDG do plugin é o
+  padrão de leitura **e** escrita fora do pane (`.herdr-pet-state/` do CWD só
+  se já existir).
+- Needle do farewell mais específico (`🐾 Sessão:`) — título de tarefa com a
+  palavra "Sessão" não atalha mais o fechamento.
+
 ## [0.3.1] - 2026-08-14
 
 ### Fixed

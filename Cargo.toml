@@ -1,6 +1,6 @@
 [package]
 name = "herdr-pet"
-version = "0.3.1"
+version = "0.4.0"
 edition = "2021"
 description = "Companion V-Pet for Herdr — mirrors your coding agent"
 license = "AGPL-3.0-or-later"
