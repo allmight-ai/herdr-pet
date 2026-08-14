@@ -7,9 +7,10 @@
 //! marca: se o pai tem sessão no disco, os filhos ativos entram no `⚙ N`
 //! e no XP.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use serde::Deserialize;
 
@@ -212,14 +213,15 @@ struct GrokMeta {
 /// o Herdr hoje não manda `agent_session` nos panes grok:
 ///
 /// 1. `parent.session_id` == entrada ativa — se o Herdr passar a sessão.
-/// 2. `HERDR_PANE_ID` do pid (`/proc/{pid}/environ` no Linux; `ps eww -p`
-///    no macOS, o manifesto declara as duas plataformas). Se o pane
-///    **resolveu** e não casa com nenhum grok da lista → **descarta** a
-///    sessão (pid reciclado não escorrega pro vizinho via cwd).
-/// 3. Sem chave (pid morto / sem env): fallback por cwd **só** se existe
-///    exatamente 1 grok working naquele cwd e nenhum grok idle no mesmo
-///    cwd. Ambíguo (2 working, ou 1 working + idle) → sem filho, não
-///    inventa dono.
+/// 2. Pid informado e **morto** → sessão stale, descarta. Não é "sem chave":
+///    `active_sessions.json` sobrevive a SIGKILL e o `meta.json` fica
+///    `running` pra sempre; fallback por cwd adotaria o fantasma.
+/// 3. `HERDR_PANE_ID` do pid vivo (`/proc/{pid}/environ` no Linux; `ps eww -p`
+///    no macOS). Resultado cacheado (env não muda). Se o pane **resolveu**
+///    e não casa com nenhum grok da lista → **descarta** a sessão.
+/// 4. Sem chave (pid 0 / vivo sem `HERDR_PANE_ID`): fallback por cwd **só**
+///    se existe exatamente 1 grok working naquele cwd e nenhum idle.
+///    Ambíguo → sem filho.
 ///
 /// Se (1) ou (2) amarram a um pai **idle**, os filhos não vazam.
 fn grok_children(agents: &[AgentInfo]) -> Vec<AgentInfo> {
@@ -266,6 +268,9 @@ fn owner_for_grok_session<'a>(
     grok: &[&'a AgentInfo],
     working: &[&'a AgentInfo],
 ) -> Option<&'a AgentInfo> {
+    if session.pid != 0 && !pid_is_alive(session.pid) {
+        return None;
+    }
     if let Some(p) = grok
         .iter()
         .find(|a| a.session_id.as_deref() == Some(session.session_id.as_str()))
@@ -277,6 +282,21 @@ fn owner_for_grok_session<'a>(
         return grok.iter().find(|a| a.pane_id == pane).copied();
     }
     cwd_unambiguous_working(session, grok, working)
+}
+
+/// Linux: `/proc/<pid>` existe. macOS / sem proc: `kill -0` (sem sinal).
+fn pid_is_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    if Path::new("/proc/self").exists() {
+        return Path::new(&format!("/proc/{pid}")).exists();
+    }
+    std::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 /// Fallback sem chave pane↔sessão: só 1 grok working naquele cwd e zero idle.
@@ -302,15 +322,31 @@ fn cwd_unambiguous_working<'a>(
     None
 }
 
+/// `pid` → `HERDR_PANE_ID` (ou ausência). Env de processo não muda: acerto
+/// e erro cacheiam pra sempre. Só consultamos pid **vivo** (stale cai antes);
+/// um vivo sem a variável não ganha ela depois — recachear None só
+/// reforkaria `ps` a cada poll no macOS. Sem libc no crate.
+static PANE_BY_PID: OnceLock<Mutex<HashMap<u32, Option<String>>>> = OnceLock::new();
+
+fn pane_cache() -> std::sync::MutexGuard<'static, HashMap<u32, Option<String>>> {
+    PANE_BY_PID
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
+
 /// `HERDR_PANE_ID` do processo Grok (Herdr injeta no PTY).
 /// Linux: `/proc/{pid}/environ`. macOS (e fallback): `ps eww -p <pid>`.
-/// `None` = pid 0, processo sumiu, ou o env não tem a variável — aí o
-/// caller pode tentar o fallback restrito por cwd.
 fn herdr_pane_id_for_pid(pid: u32) -> Option<String> {
     if pid == 0 {
         return None;
     }
-    herdr_pane_id_from_proc(pid).or_else(|| herdr_pane_id_from_ps(pid))
+    if let Some(hit) = pane_cache().get(&pid) {
+        return hit.clone();
+    }
+    let found = herdr_pane_id_from_proc(pid).or_else(|| herdr_pane_id_from_ps(pid));
+    pane_cache().insert(pid, found.clone());
+    found
 }
 
 fn herdr_pane_id_from_proc(pid: u32) -> Option<String> {
@@ -655,10 +691,10 @@ mod tests {
         let _ = fs::remove_dir_all(home);
     }
 
-    fn write_one_kid(home: &Path, cwd: &str, sid: &str, kid: &str) {
+    fn write_one_kid(home: &Path, cwd: &str, sid: &str, kid: &str, pid: u32) {
         write(
             &home.join("active_sessions.json"),
-            &format!(r#"[{{"session_id":"{sid}","pid":4294967294,"cwd":"{cwd}"}}]"#),
+            &format!(r#"[{{"session_id":"{sid}","pid":{pid},"cwd":"{cwd}"}}]"#),
         );
         write(
             &home
@@ -678,7 +714,7 @@ mod tests {
         // fallback recusa. Filho conta 0×, nunca 2×.
         let home = tmp_dir("g-fanout");
         let cwd = "/tmp/proj-fanout";
-        write_one_kid(&home, cwd, "sess-a", "kid");
+        write_one_kid(&home, cwd, "sess-a", "kid", 4_294_967_294);
         let a = AgentInfo {
             pane_id: "w1:p1".into(),
             cwd: Some(cwd.into()),
@@ -703,10 +739,10 @@ mod tests {
 
     #[test]
     fn expand_um_grok_working_cwd_unico_pega_filho() {
-        // Fallback por cwd só quando é o único grok daquele cwd.
+        // Fallback por cwd: pid vivo sem HERDR_PANE_ID (init) + único grok no cwd.
         let home = tmp_dir("g-one");
         let cwd = "/tmp/proj-one";
-        write_one_kid(&home, cwd, "sess-a", "kid");
+        write_one_kid(&home, cwd, "sess-a", "kid", 1);
         let a = AgentInfo {
             pane_id: "w1:p1".into(),
             cwd: Some(cwd.into()),
@@ -727,7 +763,7 @@ mod tests {
     fn expand_working_mais_idle_mesmo_cwd_sem_bind_nao_chuta() {
         let home = tmp_dir("g-mix");
         let cwd = "/tmp/proj-mix";
-        write_one_kid(&home, cwd, "sess-a", "kid");
+        write_one_kid(&home, cwd, "sess-a", "kid", 4_294_967_294);
         let idle = AgentInfo {
             status: AgentStatus::Idle,
             pane_id: "w1:pIdle".into(),
@@ -746,6 +782,28 @@ mod tests {
             out.iter().all(|a| a.session_id.as_deref() != Some("kid")),
             "idle no cwd bloqueia o fallback"
         );
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn expand_pid_morto_descarta_sessao_stale() {
+        // Pid fake morto ≠ "sem chave": mesmo com 1 working no cwd, não adota
+        // o filho cujo meta.json ficou running pra sempre.
+        let home = tmp_dir("g-stale");
+        let cwd = "/tmp/proj-stale";
+        write_one_kid(&home, cwd, "sess-dead", "ghost", 4_294_967_294);
+        let a = AgentInfo {
+            pane_id: "w1:p1".into(),
+            cwd: Some(cwd.into()),
+            session_id: None,
+            ..parent_grok()
+        };
+        let out = with_grok_home(&home, || expand(&[a.clone()]));
+        assert!(
+            out.iter().all(|x| x.session_id.as_deref() != Some("ghost")),
+            "pid morto não cai no fallback por cwd"
+        );
+        assert_eq!(out, vec![a]);
         let _ = fs::remove_dir_all(home);
     }
 
