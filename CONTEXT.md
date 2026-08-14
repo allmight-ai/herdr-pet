@@ -21,7 +21,7 @@ _Avoid_: stats forjados, poder do gene
 ### Quem o pet observa
 
 **Agente**:
-O assistente de código (Claude Code, etc.) cujo trabalho o pet acompanha. Status: `working`, `done`, `blocked`, `idle`, `unknown`. Inclui o processo que o Herdr detecta **e** subagentes do Claude/GLM ainda rodando (time/Task), que o Herdr não lista.
+O assistente de código (Claude Code, etc.) cujo trabalho o pet acompanha. Status: `working`, `done`, `blocked`, `idle`, `unknown`. Inclui o processo que o Herdr detecta **e** subagentes internos ainda rodando (Claude time/Task, Grok `spawn_subagent`, …), que o Herdr não lista.
 _Avoid_: modelo, LLM
 
 ### Progressão

@@ -143,7 +143,7 @@ fn entry_to_info(a: &AgentEntry) -> AgentInfo {
 /// Claude/GLM ganham os subagentes ainda rodando (o Herdr só lista o processo pai).
 pub fn all_agents_info() -> Vec<AgentInfo> {
     let agents: Vec<AgentInfo> = list_entries().iter().map(entry_to_info).collect();
-    crate::claude::expand_subagents(&agents)
+    crate::subagents::expand(&agents)
 }
 
 /// Agente que o pet deve espelhar (display): o **focado**; senão o do mesmo workspace;
@@ -222,17 +222,29 @@ pub struct AgentsSnapshot {
     pub n_working: usize,
     pub pane_seqs: Vec<PaneSeq>,
     pub working_panes: Vec<String>,
+    /// Rótulos curtos de quem está `working` (pra o rodapé não ser um número cego).
+    pub working_labels: Vec<String>,
 }
 
 /// Constrói o snapshot a partir da lista já lida (sem novo `herdr agent list`).
+/// `n_working` e o humor saem do **mesmo** filtro: se ninguém está `working`,
+/// o pet dorme e o rodapé é `⚙ 0`. Sem working fantasma com mood dormindo.
 pub fn snapshot(agents: &[AgentInfo]) -> AgentsSnapshot {
-    let (status, titles) = aggregate_display(agents);
     let working: Vec<&AgentInfo> = agents
         .iter()
         .filter(|a| matches!(a.status, AgentStatus::Working))
         .collect();
     let n_working = working.len();
     let working_panes = working.iter().map(|a| a.pane_id.clone()).collect();
+    let working_labels = working.iter().map(|a| working_label(a)).collect();
+    let (status, titles) = if n_working > 0 {
+        aggregate_display(agents)
+    } else {
+        // Sem working: espelha o focado (idle/done/blocked). Tarefas de working = vazio.
+        let (st, ts) = aggregate_display(agents);
+        debug_assert!(!matches!(st, AgentStatus::Working));
+        (st, ts)
+    };
     let pane_seqs = agents
         .iter()
         .map(|a| PaneSeq {
@@ -246,7 +258,36 @@ pub fn snapshot(agents: &[AgentInfo]) -> AgentsSnapshot {
         n_working,
         pane_seqs,
         working_panes,
+        working_labels,
     }
+}
+
+/// `claude`, `grok`, ou o nome do subagente (descrição curta).
+fn working_label(a: &AgentInfo) -> String {
+    let kind = a.agent.as_deref().unwrap_or("agent");
+    match a.title.as_deref() {
+        Some(t) if a.session_id.is_some() && a.pane_id.contains(':') && a.pane_id.matches(':').count() >= 2 => {
+            // filho sintético `w16:p5:abc` — a tarefa identifica melhor que "claude"
+            let short = t.split_whitespace().take(3).collect::<Vec<_>>().join(" ");
+            if short.is_empty() {
+                kind.to_string()
+            } else {
+                short
+            }
+        }
+        _ => kind.to_string(),
+    }
+}
+
+/// Rodapé: `⚙ 0` ou `⚙ 2 grok, claude`. Sempre o conjunto atual, nunca pico da sessão.
+pub fn format_working_badge(n_working: usize, labels: &[String]) -> String {
+    if n_working == 0 {
+        return "⚙ 0".to_string();
+    }
+    if labels.is_empty() {
+        return format!("⚙ {n_working}");
+    }
+    format!("⚙ {n_working} {}", labels.join(", "))
 }
 
 #[cfg(test)]
@@ -386,5 +427,23 @@ mod tests {
         assert_eq!(snap.working_panes, vec!["w2:pB", "w3:pC"]);
         assert_eq!(snap.pane_seqs.len(), 3);
         assert_eq!(snap.pane_seqs[1].seq, 20);
+    }
+
+    #[test]
+    fn snapshot_sem_working_e_zero_e_nao_working() {
+        let agents = [ai(AgentStatus::Idle, Some("dormindo"), true)];
+        let snap = snapshot(&agents);
+        assert_eq!(snap.n_working, 0);
+        assert_eq!(snap.status, AgentStatus::Idle);
+        assert_eq!(format_working_badge(snap.n_working, &snap.working_labels), "⚙ 0");
+    }
+
+    #[test]
+    fn badge_lista_quem_trabalha() {
+        assert_eq!(format_working_badge(0, &[]), "⚙ 0");
+        assert_eq!(
+            format_working_badge(2, &["grok".into(), "claude".into()]),
+            "⚙ 2 grok, claude"
+        );
     }
 }

@@ -33,7 +33,7 @@ Ao fechar o pane (Ctrl+C ou toggle), o pet imprime um **resumo da sessão** — 
 
 ## Espelho do agente
 
-O `watch` agrega **todos** os agentes (`herdr agent list`) e anima o mood: se qualquer um está `working`, o pet acorda; caso contrário espelha o agente focado. Com vários `working`, rotaciona entre as tarefas deles (~4 s cada). Em panes Claude/GLM, também conta subagentes do time/Task que ainda estão rodando (o Herdr só vê o processo pai).
+O `watch` agrega **todos** os agentes (`herdr agent list`) e anima o mood: se qualquer um está `working`, o pet acorda; caso contrário espelha o agente focado. Com vários `working`, rotaciona entre as tarefas deles (~4 s cada). Também conta subagentes internos ainda rodando (Claude time/Task, Grok `spawn_subagent`) — o Herdr só vê o processo pai.
 
 | `agent_status` | mood |
 | --- | --- |
@@ -43,7 +43,9 @@ O `watch` agrega **todos** os agentes (`herdr agent list`) e anima o mood: se qu
 | `idle` | dormindo |
 | `unknown` | confuso |
 
-A tarefa exibida é o `terminal_title` de um agente que trabalha (rotacionando entre eles se houver vários, ~4 s cada); ou do focado, se ninguém trabalha. Rodapé: `⚙ N` = N agentes working. Detecção via Screen Manifest do Herdr; o agente precisa estar num pane nativo (sem tmux aninhado).
+A tarefa exibida é o `terminal_title` de um agente que trabalha (rotacionando entre eles se houver vários, ~4 s cada); ou do focado, se ninguém trabalha. Rodapé: `⚙ 2 grok, claude` = quem está `working` agora; `⚙ 0` se ninguém. Humor e conta saem do mesmo filtro (dormindo ⇒ zero). Detecção via Screen Manifest do Herdr; o agente precisa estar num pane nativo (sem tmux aninhado).
+
+O `herdr-pet status` (no shell, sem o pane aberto) mostra identidade, nível, barra de XP e a mesma lista de quem está working. Sem `HERDR_PLUGIN_STATE_DIR`, lê o state do Herdr em `~/.local/state/herdr/plugins/allmight-ai.herdr-pet/`.
 
 ## Deployment
 

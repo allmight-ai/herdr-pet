@@ -6,7 +6,7 @@
 
 pub mod agent;
 pub mod anchor;
-pub mod claude;
+pub mod subagents;
 pub mod catalog;
 pub mod crypto;
 pub mod forge;

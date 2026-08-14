@@ -139,6 +139,7 @@ fn main() {
             // nº de agentes trabalhando agora (multiplicador harmônico do XP live).
             let mut n_working: usize =
                 if matches!(status, herdr_pet::AgentStatus::Working) { 1 } else { 0 };
+            let mut working_labels: Vec<String> = Vec::new();
 
             // Sessão começa no XP/nível de disco — o catch-up entra no delta do resumo.
             let mut session = Session::start(state.xp, state.level());
@@ -154,6 +155,7 @@ fn main() {
                 status = snap.status;
                 titles = snap.titles;
                 n_working = snap.n_working;
+                working_labels = snap.working_labels;
                 session.note_working(&snap.working_panes, snap.n_working);
             }
 
@@ -168,7 +170,15 @@ fn main() {
             const TITLE_ROTATION_FRAMES: u32 = 5; // ~4s por tarefa quando há vários working
 
             // sig = o que determina redraw. Inclui nível + XP p/ redesenhar ao subir.
-            let mut last_sig: Option<(herdr_pet::AgentStatus, u32, Option<String>, u8, u64)> = None;
+            let mut last_sig: Option<(
+                herdr_pet::AgentStatus,
+                u32,
+                Option<String>,
+                u8,
+                u64,
+                usize,
+                String,
+            )> = None;
 
             while running.load(Ordering::SeqCst) {
                 // Poll a cada ~2,4s (3 frames): snapshot único — focado (display),
@@ -201,7 +211,16 @@ fn main() {
                 // Redraw só quando algo visível muda (status, fase da anim, tarefa, nível/XP).
                 let lv = level_view(state.xp);
                 let period = herdr_pet::render::animation_period(status, &pet);
-                let sig = (status, frame % period, title.clone(), lv.level, lv.xp_into);
+                let badge = herdr_pet::agent::format_working_badge(n_working, &working_labels);
+                let sig = (
+                    status,
+                    frame % period,
+                    title.clone(),
+                    lv.level,
+                    lv.xp_into,
+                    n_working,
+                    badge.clone(),
+                );
                 if last_sig.as_ref() != Some(&sig) {
                     print!("\x1b[H\x1b[J"); // topo + limpa até o fim (sem scrollar)
                     println!(
@@ -211,17 +230,15 @@ fn main() {
                     println!();
                     if lv.xp_span > 0 {
                         println!(
-                            "{DIM}#{idx} · {BOLD}Nv {}{RESET}{DIM} · {RESET}{}{DIM} {}/{} XP · ⚙ {}{RESET}",
+                            "{DIM}#{idx} · {BOLD}Nv {}{RESET}{DIM} · {RESET}{}{DIM} {}/{} XP · {badge}{RESET}",
                             lv.level,
                             bar(lv.xp_into as u16, lv.xp_span as u16, 10),
                             lv.xp_into,
                             lv.xp_span,
-                            n_working,
                         );
                     } else {
                         println!(
-                            "{DIM}#{idx} · {BOLD}Nv 99 ★ máximo{RESET}{DIM} · ⚙ {} · Ctrl+C{RESET}",
-                            n_working
+                            "{DIM}#{idx} · {BOLD}Nv 99 ★ máximo{RESET}{DIM} · {badge} · Ctrl+C{RESET}",
                         );
                     }
                     let _ = std::io::stdout().flush();
@@ -364,7 +381,10 @@ fn main() {
             );
         }
         Cmd::Status => match herdr_pet::state::load() {
-            Some(s) => print_pet(&hatch(s.github_id, s.active_index)),
+            Some(s) => {
+                print_pet(&hatch(s.github_id, s.active_index));
+                print_progress(&s);
+            }
             None => println!(
                 "herdr-pet — sem state ainda. Rode `herdr-pet init` ou abra o pane `watch` (auto-init)."
             ),
@@ -400,6 +420,36 @@ fn print_pet(pet: &herdr_pet::Pet) {
     println!("│ âncora  : {}", pet.provenance.anchor);
     println!("│ seed    : {}…", &pet.provenance.seed_hash[..12]);
     println!("│ versão  : {}", pet.provenance.genesis_version);
+    println!("└──────────────────────────────────────────");
+}
+
+/// XP, nível e quem está working agora (inclui subagentes).
+fn print_progress(state: &herdr_pet::state::State) {
+    use herdr_pet::progression::level_view;
+    use herdr_pet::render::{bar, BOLD, DIM, RESET};
+
+    let lv = level_view(state.xp);
+    let snap = herdr_pet::agent::snapshot(&herdr_pet::agent::all_agents_info());
+    println!("┌─ progresso ───────────────────────────");
+    if lv.xp_span > 0 {
+        println!(
+            "│ nível   : {BOLD}Nv {}{RESET}  {}  {}/{} XP",
+            lv.level,
+            bar(lv.xp_into as u16, lv.xp_span as u16, 10),
+            lv.xp_into,
+            lv.xp_span,
+        );
+    } else {
+        println!("│ nível   : {BOLD}Nv 99 ★ máximo{RESET}");
+    }
+    println!("│ total   : {} XP", state.xp);
+    println!(
+        "│ agora   : {}",
+        herdr_pet::agent::format_working_badge(snap.n_working, &snap.working_labels)
+    );
+    for title in snap.titles.iter().take(5) {
+        println!("{DIM}│           · {title}{RESET}");
+    }
     println!("└──────────────────────────────────────────");
 }
 

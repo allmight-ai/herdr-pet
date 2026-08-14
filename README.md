@@ -80,7 +80,7 @@ herdr-pet setup               # reaplicar atalho + PATH (idempotente)
 herdr-pet open                # abre ou fecha o painel (precisa do Herdr rodando)
 herdr-pet watch               # casinha ao vivo no terminal atual
 herdr-pet watch --mood done   # pré-visualiza um humor
-herdr-pet status              # dados do pet
+herdr-pet status              # identidade + XP, nível e quem está working
 herdr-pet gallery             # um pet de cada raridade
 herdr-pet init                # trava a âncora do GitHub e choca o pet #0
 ```
@@ -111,7 +111,7 @@ Dali saem espécie, raridade (60 / 25 / 10 / 4 / 1), shiny (1/128), IVs e nome.
 O mesmo par `(github_id, índice)` sempre produz o mesmo pet.
 
 **Espelho.**  
-O `watch` agrega **todos** os agentes (`herdr agent list`) e mapeia o status: se qualquer um está `working`, o pet acorda; caso contrário espelha o agente focado. Com vários `working` ao mesmo tempo, ele **rotaciona** entre as tarefas deles (~4 s cada). Em Claude/GLM, também conta os subagentes do time/Task que ainda estão rodando. O rodapé mostra `⚙ N` (N agentes trabalhando).
+O `watch` agrega **todos** os agentes (`herdr agent list`) e mapeia o status: se qualquer um está `working`, o pet acorda; caso contrário espelha o agente focado. Com vários `working` ao mesmo tempo, ele **rotaciona** entre as tarefas deles (~4 s cada). Também conta subagentes internos ainda rodando (Claude time/Task, Grok `spawn_subagent`). O rodapé mostra quem está working (`⚙ 2 grok, claude`) e `⚙ 0` quando ninguém trabalha.
 
 | `agent_status` | humor |
 | --- | --- |
@@ -198,7 +198,7 @@ herdr-pet setup               # re-apply hotkey + PATH (idempotent)
 herdr-pet open                # toggle the pane (Herdr must be running)
 herdr-pet watch               # live house in the current terminal
 herdr-pet watch --mood done   # preview a mood
-herdr-pet status              # pet data
+herdr-pet status              # identity + XP, level, and who is working
 herdr-pet gallery             # one pet per rarity tier
 herdr-pet init                # lock GitHub anchor and hatch pet #0
 ```
@@ -217,7 +217,7 @@ That seed yields species, rarity (60 / 25 / 10 / 4 / 1), shiny (1/128), IVs, and
 The same `(github_id, index)` always produces the same pet.
 
 **Mirror.**  
-`watch` aggregates **all** agents (`herdr agent list`) and maps status to mood: if any is `working`, the pet wakes up; otherwise it mirrors the focused one. With several `working` agents at once, it rotates through their tasks (~4 s each). On Claude/GLM panes it also counts still-running team/Task subagents (Herdr only sees the parent process). The footer shows `⚙ N` (N agents working). Detection uses Herdr’s Screen Manifest (Claude Code needs no extra config). The agent must run in a native Herdr pane — nested tmux breaks detection.
+`watch` aggregates **all** agents (`herdr agent list`) and maps status to mood: if any is `working`, the pet wakes up; otherwise it mirrors the focused one. With several `working` agents at once, it rotates through their tasks (~4 s each). It also counts still-running internal subagents (Claude team/Task, Grok `spawn_subagent` — Herdr only sees the parent process). The footer names who is working (`⚙ 2 grok, claude`) and shows `⚙ 0` when nobody is. Detection uses Herdr’s Screen Manifest (Claude Code needs no extra config). The agent must run in a native Herdr pane — nested tmux breaks detection.
 
 **Progression (XP & level).**  
 The pet earns XP only from **any agent's** real work — it counts all projects, not just the focused one. 1 working agent earns the full rate (~1000 XP/h); each extra agent earns less (½, ⅓, … — harmonic decay, anti-proliferation). With the pane closed, work is tallied on reopen via `state_change_seq` at a lower rate. `idle` earns nothing. Level (1–99) is derived from total XP — each level needs more than the last (`100 × level`); reaching 99 is a long-term goal (~1 year). Closing the pane prints a session summary (agents, XP gained, level, duration). See `CONTEXT.md` and `docs/adr/`.

@@ -4,6 +4,25 @@ Todas as mudanças notáveis deste projeto serão documentadas aqui.
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/)
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.3.1] - 2026-08-14
+
+### Fixed
+- `⚙ N` inflava com subagente Claude já morto: o jsonl às vezes fecha em texto
+  sem `end_turn`, e o filho era contado mesmo com o pai `done`/`idle`. Agora só
+  entra filho de pai `working`, e texto final sem stop_reason conta como
+  terminado.
+- Rodapé cego: `⚙ N` agora lista quem está working (`⚙ 2 grok, claude`) e
+  mostra `⚙ 0` quando ninguém trabalha — o humor e a conta saem do mesmo filtro
+  (dormindo ⇒ zero).
+
+### Changed
+- **Subagentes de qualquer pai**: além do Claude/GLM, o pet lê os filhos do Grok
+  (`active_sessions.json` + `sessions/.../subagents/`). Quem ainda roda entra no
+  `⚙ N`, na rotação e no XP — o Herdr continua vendo só o processo pai.
+- **`herdr-pet status`** mostra nível, barra de XP, total e quem está working agora
+  (incluindo subagentes). Fora do pane do plugin, lê o state do Herdr
+  (`~/.local/state/herdr/plugins/…`) — não o `.herdr-pet-state/` de dev.
+
 ## [0.3.0] - 2026-08-13
 
 ### Added
@@ -51,6 +70,7 @@ e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 - Render ANSI otimizado: pet cacheado por `(github_id, índice)` e redraw só quando algo
   visível muda.
 
+[0.3.1]: https://github.com/allmight-ai/herdr-pet/releases/tag/v0.3.1
 [0.3.0]: https://github.com/allmight-ai/herdr-pet/releases/tag/v0.3.0
 [0.2.0]: https://github.com/allmight-ai/herdr-pet/releases/tag/v0.2.0
 [0.1.0]: https://github.com/allmight-ai/herdr-pet/releases/tag/v0.1.0

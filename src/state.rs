@@ -113,12 +113,30 @@ impl State {
     }
 }
 
-/// Diretório do state: `HERDR_PLUGIN_STATE_DIR` (runtime) ou fallback de dev.
+/// Diretório do state, nesta ordem:
+/// 1. `HERDR_PLUGIN_STATE_DIR` (pane do plugin)
+/// 2. state do Herdr em disco (`~/.local/state/herdr/plugins/allmight-ai.herdr-pet`)
+///    — pra `herdr-pet status` no shell ver o mesmo XP do watch
+/// 3. `.herdr-pet-state/` (dev, sem install)
 pub fn state_dir() -> PathBuf {
-    match std::env::var("HERDR_PLUGIN_STATE_DIR") {
-        Ok(d) => PathBuf::from(d),
-        Err(_) => PathBuf::from(".herdr-pet-state"),
+    if let Ok(d) = std::env::var("HERDR_PLUGIN_STATE_DIR") {
+        return PathBuf::from(d);
     }
+    if let Some(p) = herdr_plugin_state_dir() {
+        if p.join("state.json").is_file() {
+            return p;
+        }
+    }
+    PathBuf::from(".herdr-pet-state")
+}
+
+/// `XDG_STATE_HOME/herdr/plugins/allmight-ai.herdr-pet` (padrão: `~/.local/state/...`).
+pub fn herdr_plugin_state_dir() -> Option<PathBuf> {
+    let base = match std::env::var("XDG_STATE_HOME") {
+        Ok(d) => PathBuf::from(d),
+        Err(_) => PathBuf::from(std::env::var("HOME").ok()?).join(".local/state"),
+    };
+    Some(base.join("herdr/plugins/allmight-ai.herdr-pet"))
 }
 
 pub fn state_path() -> PathBuf {
