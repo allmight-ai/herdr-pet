@@ -70,8 +70,11 @@ impl State {
     /// avançando sofrem o decaimento harmônico (anti-proliferação). Devolve o XP ganho.
     ///
     /// Também **expurga** do `last_seq_by_pane` as chaves ausentes da observação
-    /// corrente (C12): pane morto e subagente sintético que encerrou não deixam
-    /// slot eterno no state.json. Só aqui — ver nota em `record_seen_seq`.
+    /// corrente (C12): pane morto não deixa slot eterno. (Hoje as entradas são
+    /// só panes reais listados pelo Herdr — subagentes sintéticos vêm SEM
+    /// `state_change_seq` desde a fase P0 e nunca entraram neste mapa; a
+    /// eviction também poda sobras deixadas por versões antigas.) Observação
+    /// vazia NÃO evicta — ver guarda no corpo. Só aqui; nota em `record_seen_seq`.
     pub fn apply_catchup(&mut self, agents: &[PaneSeq]) -> u64 {
         // Dedupe por pane (maior seq neste tick). Snapshot já descarta pane/seq
         // omitidos; se o mesmo pane vier 2×, o maior valor é o observado.
@@ -97,13 +100,19 @@ impl State {
             self.remember_seq(pane_id, *observed);
         }
         // Eviction (C12): o catch-up roda UMA vez na abertura e vê o conjunto
-        // atual de panes — quem não apareceu (pane fechado, subagente encerrado)
-        // sai do mapa. Isso basta pra conter o crescimento: cada sessão de watch
-        // poda o mapa pro universo corrente. Pane VIVO momentaneamente ausente
-        // perde a baseline e volta como primeira-vista (sem crédito histórico) —
-        // no máximo subconta, nunca infla.
-        self.last_seq_by_pane
-            .retain(|k, _| latest.contains_key(k.as_str()));
+        // atual de panes — quem não apareceu (pane fechado/morto, sobra de
+        // versão antiga) sai do mapa; cada sessão de watch poda pro universo
+        // corrente. GUARDA: observação VAZIA não evicta nada — `herdr agent
+        // list` falhar na abertura (server recarregando, binário fora do PATH —
+        // justamente quando o pane sobe) chega aqui como `latest == {}`, e um
+        // retain sem guarda apagaria o mapa INTEIRO, que o gate de save então
+        // persistiria. Pane VIVO momentaneamente ausente perde a baseline e
+        // volta como primeira-vista (sem crédito histórico) — no máximo
+        // subconta, nunca infla.
+        if !latest.is_empty() {
+            self.last_seq_by_pane
+                .retain(|k, _| latest.contains_key(k.as_str()));
+        }
         // Largura: 1, ½, ⅓… no ganho (maior primeiro). Não H(n)/n sobre a soma —
         // um tick de 3 XP não pode comer 73 do worker (C7). Ver harmonic_weighted_xp.
         let granted = harmonic_weighted_xp(&mut gains);

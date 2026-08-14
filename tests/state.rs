@@ -345,6 +345,41 @@ fn pane_vivo_ausente_numa_abertura_nao_credita_historico_na_volta() {
 }
 
 #[test]
+fn apply_catchup_com_observacao_vazia_nao_apaga_o_mapa() {
+    // `herdr agent list` falhou na abertura (server recarregando, binário fora
+    // do PATH) → snapshot vazio. Sem a guarda, o retain limparia o mapa INTEIRO
+    // e o gate de save persistiria o apagamento — todas as baselines perdidas.
+    let mut s = State::new(1);
+    s.apply_catchup(&[
+        PaneSeq {
+            pane_id: "w1:pA".into(),
+            seq: 100,
+        },
+        PaneSeq {
+            pane_id: "w2:pB".into(),
+            seq: 40,
+        },
+    ]);
+    let xp_antes = s.xp;
+    assert_eq!(s.apply_catchup(&[]), 0, "sem observação não há ganho");
+    assert_eq!(
+        s.last_seq_by_pane.len(),
+        2,
+        "observação vazia NÃO evicta o mapa"
+    );
+    assert_eq!(s.last_seq_by_pane.get("w1:pA"), Some(&100));
+    assert_eq!(s.last_seq_by_pane.get("w2:pB"), Some(&40));
+    assert_eq!(s.xp, xp_antes);
+    // Recuperado o poll, o catch-up seguinte credita o delta inteiro — as
+    // baselines sobreviveram à falha.
+    let gained = s.apply_catchup(&[PaneSeq {
+        pane_id: "w1:pA".into(),
+        seq: 160,
+    }]);
+    assert_eq!(gained, herdr_pet::progression::xp_for_catchup(60));
+}
+
+#[test]
 fn record_seen_seq_nao_evicta_pane_ausente() {
     // O poll NÃO evicta: pane vivo que pisco fora de um snapshot intermediário
     // não pode perder a baseline por flicker — senão a próxima observação dele
