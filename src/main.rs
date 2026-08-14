@@ -174,9 +174,16 @@ fn main() {
             let mut accrual = Accrual::new();
             let mut last_instant = Instant::now();
 
-            // Save periódico (~30s) e só se o XP mudou — sem I/O de disco a cada tick.
+            // Save periódico (~30s), se o XP OU as baselines de seq mudaram desde o
+            // último save — sem I/O de disco a cada tick. Baseline avançada pelo poll
+            // e não salva morre na memória: o catch-up seguinte paga de novo o trecho
+            // já visto com o pane aberto. Sem clonar mapa por frame: guardamos o mapa
+            // do momento do último save (clone só ao salvar) e comparamos só quando o
+            // gate de frame passa (~a cada 30s).
             let mut last_save_frame = 0u32;
             let mut last_saved_xp = state.xp;
+            let mut last_saved_seqs: std::collections::HashMap<String, u64> =
+                state.last_seq_by_pane.clone();
             const SAVE_EVERY_FRAMES: u32 = 36; // ~30s (ciclo ~0,8s)
             const TITLE_ROTATION_FRAMES: u32 = 5; // ~4s por tarefa quando há vários working
 
@@ -257,13 +264,16 @@ fn main() {
                     last_sig = Some(sig);
                 }
 
-                // Save periódico (sem ddos de disco): ~a cada 30s, só se o XP mudou.
+                // Save periódico (sem ddos de disco): ~a cada 30s, se o XP ou as
+                // baselines mudaram desde o último save. Gate de frame primeiro —
+                // a comparação do mapa roda ~a cada 30s, não a cada frame.
                 if persist
-                    && state.xp != last_saved_xp
                     && frame.wrapping_sub(last_save_frame) >= SAVE_EVERY_FRAMES
+                    && (state.xp != last_saved_xp || state.last_seq_by_pane != last_saved_seqs)
                 {
                     if herdr_pet::state::save(&state).is_ok() {
                         last_saved_xp = state.xp;
+                        last_saved_seqs = state.last_seq_by_pane.clone();
                         last_save_frame = frame;
                     }
                 }
@@ -278,8 +288,11 @@ fn main() {
                 frame = frame.wrapping_add(1);
             }
 
-            // Save final na saída (Ctrl+C / SIGHUP do toggle) — não perde o progresso.
-            if persist && state.xp != last_saved_xp {
+            // Save final na saída (Ctrl+C / SIGHUP do toggle) — não perde o progresso
+            // (XP ou baselines de seq ainda não salvos).
+            if persist
+                && (state.xp != last_saved_xp || state.last_seq_by_pane != last_saved_seqs)
+            {
                 let _ = herdr_pet::state::save(&state);
             }
 

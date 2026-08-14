@@ -79,13 +79,13 @@ git config core.hooksPath githooks   # hooks versionados: post-commit + post-mer
 herdr-pet setup               # reaplicar atalho + PATH (idempotente)
 herdr-pet open                # abre ou fecha o painel (precisa do Herdr rodando)
 herdr-pet watch               # casinha ao vivo no terminal atual
-herdr-pet watch --mood done   # pré-visualiza um humor
+herdr-pet watch --mood done   # pré-visualiza um humor (dev, só-leitura)
 herdr-pet status              # identidade + XP, nível e quem está working
 herdr-pet gallery             # um pet de cada raridade
 herdr-pet init                # trava a âncora do GitHub e choca o pet #0
 ```
 
-O `watch` inicializa sozinho se ainda não houver state.
+O `watch` inicializa sozinho se ainda não houver state. `--mood` é modo dev de pré-visualização: **nunca** grava no state nem ganha XP (o humor é forçado, não trabalho real); sem state, exige `--id` — ex.: `herdr-pet watch --mood done --id 42`.
 
 ### Atalho automático
 
@@ -197,13 +197,13 @@ git config core.hooksPath githooks   # versioned hooks: post-commit + post-merge
 herdr-pet setup               # re-apply hotkey + PATH (idempotent)
 herdr-pet open                # toggle the pane (Herdr must be running)
 herdr-pet watch               # live house in the current terminal
-herdr-pet watch --mood done   # preview a mood
+herdr-pet watch --mood done   # preview a mood (dev, read-only)
 herdr-pet status              # identity + XP, level, and who is working
 herdr-pet gallery             # one pet per rarity tier
 herdr-pet init                # lock GitHub anchor and hatch pet #0
 ```
 
-`watch` auto-inits when there is no state yet.
+`watch` auto-inits when there is no state yet. `--mood` is a read-only dev preview: it **never** writes state or earns XP (the mood is forced, not real work); with no state, pass `--id` — e.g. `herdr-pet watch --mood done --id 42`.
 
 ### Automatic hotkey
 
