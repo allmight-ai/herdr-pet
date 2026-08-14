@@ -77,6 +77,12 @@ fn may_own_claude_layout(a: &AgentInfo) -> bool {
 /// Sessão parada (Claude fora do Herdr, leftover) não é adotada.
 const CLAUDE_FALLBACK_FRESH_SECS: u64 = 120;
 
+/// Filho sem sinal terminal: se o arquivo parou de ser escrito, está morto.
+/// 10 min — um subagente vivo escreve a cada tool_result / turno; kill no
+/// meio da tool deixa `user`/`tool_result` (Claude) ou `meta.json` sem
+/// `status` (Grok) e não volta a tocar o arquivo.
+const CHILD_STALE_SECS: u64 = 600;
+
 /// Filhos do layout `projects/<enc>/<sid>/subagents/`.
 ///
 /// 1. **Com `session_id`** (qualquer `agent`, inclusive `None`/`unknown`):
@@ -310,9 +316,23 @@ fn read_claude_title(meta_path: &Path) -> Option<String> {
         .or_else(|| meta.agent_type)
 }
 
+fn file_older_than(path: &Path, secs: u64) -> bool {
+    let Ok(mtime) = fs::metadata(path).and_then(|m| m.modified()) else {
+        return true;
+    };
+    match std::time::SystemTime::now().duration_since(mtime) {
+        Ok(age) => age.as_secs() > secs,
+        Err(_) => false,
+    }
+}
+
 /// Ainda trabalhando? jsonl ausente = recém-spawnado. Terminou se o último
 /// assistente tem `end_turn` **ou** só texto (relatório final sem stop_reason —
 /// o Claude às vezes fecha assim e virava fantasma no `⚙ N`).
+///
+/// Last line **não**-`assistant` (`user`/`tool_result` após kill no meio da
+/// tool): vivo só se o jsonl ainda está fresco (`CHILD_STALE_SECS`). Caso
+/// real: jsonl de ~15 d fechado em `tool_result` com o pai `working`.
 pub fn claude_still_running(jsonl: &Path) -> bool {
     if !jsonl.exists() {
         return true;
@@ -324,10 +344,10 @@ pub fn claude_still_running(jsonl: &Path) -> bool {
         return true;
     };
     let Ok(v) = serde_json::from_str::<serde_json::Value>(last) else {
-        return true;
+        return !file_older_than(jsonl, CHILD_STALE_SECS);
     };
     if v.get("type").and_then(|t| t.as_str()) != Some("assistant") {
-        return true;
+        return !file_older_than(jsonl, CHILD_STALE_SECS);
     }
     if matches!(
         v.pointer("/message/stop_reason").and_then(|s| s.as_str()),
@@ -491,7 +511,23 @@ fn cwd_unambiguous_working<'a>(
     if working_here.len() == 1 && same_cwd == 1 {
         return Some(working_here[0]);
     }
+    grok_debug_skip(
+        &session.session_id,
+        &format!(
+            "cwd ambíguo ({} grok, {} working) — filhos não atribuídos",
+            same_cwd,
+            working_here.len()
+        ),
+    );
     None
+}
+
+/// Falso-negativo do fallback Grok (vários panes no cwd). Só fala com
+/// `HERDR_PET_DEBUG_SUBAGENTS=1` — o poll é a cada ~2 s.
+fn grok_debug_skip(session_id: &str, reason: &str) {
+    if std::env::var_os("HERDR_PET_DEBUG_SUBAGENTS").is_some() {
+        eprintln!("herdr-pet: skip grok session {session_id}: {reason}");
+    }
 }
 
 /// `session_id` → `HERDR_PANE_ID` (ou ausência). Chave é a sessão, não o pid:
@@ -608,7 +644,7 @@ fn collect_grok(dir: &Path, parent: &AgentInfo) -> Vec<AgentInfo> {
         let Ok(meta) = serde_json::from_slice::<GrokMeta>(&data) else {
             continue;
         };
-        if !grok_meta_running(&meta) {
+        if !grok_meta_running(&meta, &meta_path) {
             continue;
         }
         let id = meta
@@ -635,7 +671,9 @@ fn collect_grok(dir: &Path, parent: &AgentInfo) -> Vec<AgentInfo> {
     out
 }
 
-/// Terminou se tem `completed_at` ou status terminal. O resto (incl. ausente) = rodando.
+/// Terminou se tem `completed_at` ou status terminal. Sem status e sem
+/// `completed_at` o recorte puro devolve `true` — o staleness do `meta.json`
+/// vive em `grok_meta_running` (esta fn não vê o path).
 pub fn grok_still_running(status: &str, completed_at: Option<&str>) -> bool {
     if completed_at.is_some() {
         return false;
@@ -646,11 +684,21 @@ pub fn grok_still_running(status: &str, completed_at: Option<&str>) -> bool {
     )
 }
 
-fn grok_meta_running(meta: &GrokMeta) -> bool {
-    grok_still_running(
+/// `status: running` (etc.) sem `completed_at` = vivo — o Grok não reescreve o
+/// meta a cada turno, então mtime velho **não** mata um `running` explícito.
+/// Status ausente: só vivo se o `meta.json` ainda está fresco (spawn recente
+/// que ainda não gravou o campo). Sem isso, `("", None)` era fantasma eterno.
+fn grok_meta_running(meta: &GrokMeta, meta_path: &Path) -> bool {
+    if !grok_still_running(
         meta.status.as_deref().unwrap_or(""),
         meta.completed_at.as_deref(),
-    )
+    ) {
+        return false;
+    }
+    if meta.status.as_deref().unwrap_or("").is_empty() {
+        return !file_older_than(meta_path, CHILD_STALE_SECS);
+    }
+    true
 }
 
 fn child(parent: &AgentInfo, id: &str, title: Option<String>) -> AgentInfo {
@@ -881,6 +929,41 @@ mod tests {
         assert_eq!(expand(&[idle.clone()]), vec![idle]);
     }
 
+    fn set_age(path: &Path, secs: u64) {
+        let t = std::time::SystemTime::now()
+            .checked_sub(std::time::Duration::from_secs(secs))
+            .unwrap();
+        fs::File::open(path).unwrap().set_modified(t).unwrap();
+    }
+
+    #[test]
+    fn claude_jsonl_tool_result_fresco_ainda_roda() {
+        let dir = tmp_dir("tr-fresh");
+        let jsonl = dir.join("a.jsonl");
+        write(
+            &jsonl,
+            r#"{"type":"user","message":{"content":[{"type":"tool_result"}]}}
+"#,
+        );
+        assert!(claude_still_running(&jsonl));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn claude_jsonl_tool_result_stale_esta_morto() {
+        // B5/C11: kill no meio da tool — last line user/tool_result, jsonl parado.
+        let dir = tmp_dir("tr-stale");
+        let jsonl = dir.join("a.jsonl");
+        write(
+            &jsonl,
+            r#"{"type":"user","message":{"content":[{"type":"tool_result"}]}}
+"#,
+        );
+        set_age(&jsonl, CHILD_STALE_SECS + 60);
+        assert!(!claude_still_running(&jsonl));
+        let _ = fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn claude_jsonl_tool_use_esta_rodando() {
         let dir = tmp_dir("run");
@@ -933,6 +1016,7 @@ mod tests {
         ));
         assert!(!grok_still_running("completed", None));
         assert!(grok_still_running("running", None));
+        // Sem path: recorte puro. Staleness do meta vazio está em grok_meta_running.
         assert!(grok_still_running("", None));
         assert!(!grok_still_running("failed", None));
     }
@@ -953,6 +1037,44 @@ mod tests {
         assert_eq!(got[0].title.as_deref(), Some("Revisar o status"));
         assert_eq!(got[0].pane_id, "w19:pB:sid-run");
         assert_eq!(got[0].status, AgentStatus::Working);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn grok_meta_sem_status_fresco_conta_como_vivo() {
+        let dir = tmp_dir("g-empty-fresh");
+        write(
+            &dir.join("sid/meta.json"),
+            r#"{"subagent_id":"sid","description":"nascendo"}"#,
+        );
+        let got = collect_grok(&dir, &parent_grok());
+        assert_eq!(got.len(), 1);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn grok_meta_sem_status_stale_esta_morto() {
+        let dir = tmp_dir("g-empty-stale");
+        let meta = dir.join("sid/meta.json");
+        write(&meta, r#"{"subagent_id":"sid","description":"abandonado"}"#);
+        set_age(&meta, CHILD_STALE_SECS + 60);
+        let got = collect_grok(&dir, &parent_grok());
+        assert!(got.is_empty());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn grok_meta_running_explicito_stale_ainda_vive() {
+        // Grok não reescreve meta a cada turno — mtime velho + status running = vivo.
+        let dir = tmp_dir("g-run-stale");
+        let meta = dir.join("sid/meta.json");
+        write(
+            &meta,
+            r#"{"subagent_id":"sid","description":"longo","status":"running"}"#,
+        );
+        set_age(&meta, CHILD_STALE_SECS + 60);
+        let got = collect_grok(&dir, &parent_grok());
+        assert_eq!(got.len(), 1);
         let _ = fs::remove_dir_all(dir);
     }
 
