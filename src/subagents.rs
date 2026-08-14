@@ -77,11 +77,11 @@ fn may_own_claude_layout(a: &AgentInfo) -> bool {
 /// Sessão parada (Claude fora do Herdr, leftover) não é adotada.
 const CLAUDE_FALLBACK_FRESH_SECS: u64 = 120;
 
-/// Filho sem sinal terminal: se o arquivo parou de ser escrito, está morto.
-/// 10 min — um subagente vivo escreve a cada tool_result / turno; kill no
-/// meio da tool deixa `user`/`tool_result` (Claude) ou `meta.json` sem
-/// `status` (Grok) e não volta a tocar o arquivo.
-const CHILD_STALE_SECS: u64 = 600;
+/// Desempate quando a cauda do jsonl **não** tem tool pendente (ou o meta
+/// Grok não tem `status`). Bem acima do teto do Bash (600 s): tools
+/// paralelas podem ficar 10 min sem escrever se a lenta ainda roda — o
+/// casamento `tool_use`/`tool_result` cobre isso; 1800 s é cinto extra.
+const CHILD_STALE_SECS: u64 = 1800;
 
 /// Filhos do layout `projects/<enc>/<sid>/subagents/`.
 ///
@@ -318,7 +318,7 @@ fn read_claude_title(meta_path: &Path) -> Option<String> {
 
 fn file_older_than(path: &Path, secs: u64) -> bool {
     let Ok(mtime) = fs::metadata(path).and_then(|m| m.modified()) else {
-        return true;
+        return false; // stat falhou: não mata filho por I/O transitório
     };
     match std::time::SystemTime::now().duration_since(mtime) {
         Ok(age) => age.as_secs() > secs,
@@ -326,13 +326,57 @@ fn file_older_than(path: &Path, secs: u64) -> bool {
     }
 }
 
+/// `tool_use.id` sem `tool_result.tool_use_id` casado na cauda = tool
+/// paralela ainda rodando (Bash até 600 s). Independente de mtime.
+fn claude_has_unmatched_tool(data: &str) -> bool {
+    let mut pending = std::collections::HashSet::new();
+    let mut anon: u32 = 0;
+    for line in data.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let Some(content) = v.pointer("/message/content").and_then(|c| c.as_array()) else {
+            continue;
+        };
+        for item in content {
+            match item.get("type").and_then(|t| t.as_str()) {
+                Some("tool_use") => {
+                    if let Some(id) = item
+                        .get("id")
+                        .and_then(|i| i.as_str())
+                        .filter(|s| !s.is_empty())
+                    {
+                        pending.insert(id.to_string());
+                    } else {
+                        anon = anon.saturating_add(1);
+                    }
+                }
+                Some("tool_result") => {
+                    if let Some(id) = item.get("tool_use_id").and_then(|i| i.as_str()) {
+                        pending.remove(id);
+                    } else {
+                        anon = anon.saturating_sub(1);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    !pending.is_empty() || anon > 0
+}
+
 /// Ainda trabalhando? jsonl ausente = recém-spawnado. Terminou se o último
 /// assistente tem `end_turn` **ou** só texto (relatório final sem stop_reason —
 /// o Claude às vezes fecha assim e virava fantasma no `⚙ N`).
 ///
-/// Last line **não**-`assistant` (`user`/`tool_result` após kill no meio da
-/// tool): vivo só se o jsonl ainda está fresco (`CHILD_STALE_SECS`). Caso
-/// real: jsonl de ~15 d fechado em `tool_result` com o pai `working`.
+/// Tools paralelas: cada `tool_result` vira uma linha `user`. A rápida
+/// chega antes; a lenta (Bash ≤ 600 s) ainda roda. Se há `tool_use` sem
+/// `tool_result` casado (por id) ⇒ vivo, sem olhar mtime. mtime
+/// (`CHILD_STALE_SECS`) só desempatá cauda **sem** tool pendente.
 pub fn claude_still_running(jsonl: &Path) -> bool {
     if !jsonl.exists() {
         return true;
@@ -340,6 +384,9 @@ pub fn claude_still_running(jsonl: &Path) -> bool {
     let Ok(data) = fs::read_to_string(jsonl) else {
         return false;
     };
+    if claude_has_unmatched_tool(&data) {
+        return true;
+    }
     let Some(last) = data.lines().rev().find(|l| !l.trim().is_empty()) else {
         return true;
     };
@@ -951,16 +998,34 @@ mod tests {
 
     #[test]
     fn claude_jsonl_tool_result_stale_esta_morto() {
-        // B5/C11: kill no meio da tool — last line user/tool_result, jsonl parado.
+        // Sem tool_use pendente + jsonl parado = morto (kill / leftover).
         let dir = tmp_dir("tr-stale");
         let jsonl = dir.join("a.jsonl");
         write(
             &jsonl,
-            r#"{"type":"user","message":{"content":[{"type":"tool_result"}]}}
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_x"}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_x"}]}}
 "#,
         );
         set_age(&jsonl, CHILD_STALE_SECS + 60);
         assert!(!claude_still_running(&jsonl));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn claude_jsonl_tool_pendente_mtime_velho_vive() {
+        // Paralelo: Read já devolveu; Bash ainda roda. Last line = tool_result
+        // da rápida. tool_use lento sem casamento ⇒ vivo apesar do mtime.
+        let dir = tmp_dir("tr-pending");
+        let jsonl = dir.join("a.jsonl");
+        write(
+            &jsonl,
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_fast"},{"type":"tool_use","id":"toolu_slow"}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_fast"}]}}
+"#,
+        );
+        set_age(&jsonl, CHILD_STALE_SECS + 60);
+        assert!(claude_still_running(&jsonl));
         let _ = fs::remove_dir_all(dir);
     }
 
