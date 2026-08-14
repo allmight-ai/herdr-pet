@@ -120,6 +120,14 @@ fn main() {
             };
             // Com `--mood` o state (se houver) é só leitura: exibe o pet, nunca grava.
             let persist = persist && forced.is_none();
+            // "O que está no disco" na abertura — capturado ANTES do catch-up: o XP e
+            // as baselines que o catch-up creditar nascem "sujos" (não salvos) e o
+            // primeiro gate periódico/final os grava. Inicializar depois do catch-up
+            // os marcaria como já salvos → nenhum save → disco nunca avança → o
+            // catch-up se repaga a cada reabertura (replay infinito).
+            let mut last_saved_xp = state.xp;
+            let mut last_saved_seqs: std::collections::HashMap<String, u64> =
+                state.last_seq_by_pane.clone();
             let gid = state.github_id;
             let idx = state.active_index;
 
@@ -175,15 +183,13 @@ fn main() {
             let mut last_instant = Instant::now();
 
             // Save periódico (~30s), se o XP OU as baselines de seq mudaram desde o
-            // último save — sem I/O de disco a cada tick. Baseline avançada pelo poll
-            // e não salva morre na memória: o catch-up seguinte paga de novo o trecho
-            // já visto com o pane aberto. Sem clonar mapa por frame: guardamos o mapa
-            // do momento do último save (clone só ao salvar) e comparamos só quando o
-            // gate de frame passa (~a cada 30s).
+            // último save (`last_saved_*`, capturados antes do catch-up) — sem I/O de
+            // disco a cada tick. Baseline avançada pelo poll e não salva morre na
+            // memória: o catch-up seguinte paga de novo o trecho já visto com o pane
+            // aberto. Sem clonar mapa por frame: guardamos o mapa do momento do último
+            // save (clone só ao salvar) e comparamos só quando o gate de frame passa
+            // (~a cada 30s).
             let mut last_save_frame = 0u32;
-            let mut last_saved_xp = state.xp;
-            let mut last_saved_seqs: std::collections::HashMap<String, u64> =
-                state.last_seq_by_pane.clone();
             const SAVE_EVERY_FRAMES: u32 = 36; // ~30s (ciclo ~0,8s)
             const TITLE_ROTATION_FRAMES: u32 = 5; // ~4s por tarefa quando há vários working
 
