@@ -62,10 +62,15 @@ struct ClaudeMeta {
 }
 
 /// Claude Code **e** GLM (Herdr rotula os dois como `claude`; `glm` se um dia vier).
-/// Só o fallback **sem** `session_id` usa isto. O caminho com sessão no disco
-/// vale pra qualquer marca — o pet não filtra por rótulo do Herdr.
+/// Só o **disparo** do fallback sem `session_id` usa isto (quem tenta adotar).
 fn claude_kind(a: &AgentInfo) -> bool {
     matches!(a.agent.as_deref(), Some("claude") | Some("glm"))
+}
+
+/// Pode ser dono de sessão no layout `projects/<enc>/<sid>/`. Na dúvida, sim:
+/// `None`/`unknown`/outra marca entram. Só o Grok tem backend próprio e fica de fora.
+fn may_own_claude_layout(a: &AgentInfo) -> bool {
+    !matches!(a.agent.as_deref(), Some("grok"))
 }
 
 /// Janela do fallback sem `session_id`: o jsonl tem que ter avançado agora.
@@ -77,11 +82,12 @@ const CLAUDE_FALLBACK_FRESH_SECS: u64 = 120;
 /// 1. **Com `session_id`** (qualquer `agent`, inclusive `None`/`unknown`):
 ///    pasta daquela sessão. Contrato do módulo: o pet não filtra por marca.
 /// 2. **Sem `session_id`** (GLM hoje — o Herdr não manda `agent_session`):
-///    fallback **só** se o pai é o único claude-kind naquele cwd, qualquer
-///    status; **e** existe exatamente uma sessão cujo jsonl avançou nos
-///    últimos `CLAUDE_FALLBACK_FRESH_SECS`; **e** ela vive num único root
-///    (`~/.claude` vs `~/.claude-glm` não se misturam). 2+ claude-kind,
-///    jsonl velho, 2 jsonl recentes, ou recentes em 2 roots → zero filhos.
+///    fallback **só** se o pai é o único possível dono de sessão
+///    claude-layout naquele cwd (`may_own_claude_layout`: qualquer pane
+///    que não seja grok, qualquer status); **e** existe exatamente uma
+///    sessão cujo jsonl avançou nos últimos `CLAUDE_FALLBACK_FRESH_SECS`;
+///    **e** ela vive num único root. 2+ candidatos no cwd (incl. `agent:
+///    None`), jsonl velho, 2 jsonl recentes, ou recentes em 2 roots → zero.
 ///
 /// O caminho pleno do GLM depende do Herdr passar `agent_session` (follow-up
 /// upstream). Enquanto isso o fallback é **inerte** com vários claude-kind
@@ -90,7 +96,6 @@ const CLAUDE_FALLBACK_FRESH_SECS: u64 = 120;
 /// o único writer recente, ainda pode ser adotado — unicidade só vê o que
 /// o Herdr lista; recência não prova dono. Sem essa garantia, recusamos.
 fn claude_children(agents: &[AgentInfo]) -> Vec<AgentInfo> {
-    let claude: Vec<&AgentInfo> = agents.iter().filter(|a| claude_kind(a)).collect();
     let mut out = Vec::new();
     for parent in agents
         .iter()
@@ -101,7 +106,7 @@ fn claude_children(agents: &[AgentInfo]) -> Vec<AgentInfo> {
             continue;
         }
         if claude_kind(parent) {
-            out.extend(claude_fallback_newest_if_unique(parent, &claude));
+            out.extend(claude_fallback_newest_if_unique(parent, agents));
         }
     }
     out
@@ -117,17 +122,19 @@ fn claude_running_under(parent: &AgentInfo) -> Vec<AgentInfo> {
     collect_claude_session(cwd, session, parent)
 }
 
-/// Sem session_id: único claude-kind no cwd + exatamente um jsonl recente
-/// num único root. Senão recusa.
-fn claude_fallback_newest_if_unique(parent: &AgentInfo, claude: &[&AgentInfo]) -> Vec<AgentInfo> {
+/// Sem session_id: único possível dono de sessão claude-layout no cwd +
+/// exatamente um jsonl recente num único root. Senão recusa.
+fn claude_fallback_newest_if_unique(parent: &AgentInfo, agents: &[AgentInfo]) -> Vec<AgentInfo> {
     let Some(cwd) = parent.cwd.as_deref() else {
         return Vec::new();
     };
     let want = norm_cwd(cwd);
-    let same = claude
+    let same = agents
         .iter()
-        .copied()
-        .filter(|a| a.cwd.as_deref().map(norm_cwd).as_deref() == Some(want.as_str()))
+        .filter(|a| {
+            may_own_claude_layout(a)
+                && a.cwd.as_deref().map(norm_cwd).as_deref() == Some(want.as_str())
+        })
         .count();
     if same != 1 {
         return Vec::new();
@@ -227,7 +234,8 @@ fn claude_roots() -> Vec<PathBuf> {
     if let Ok(explicit) = std::env::var("CLAUDE_CONFIG_DIR") {
         push_unique_root(&mut dirs, PathBuf::from(explicit));
     }
-    // Extra roots (testes 2b: dois configs sem mutar HOME). Produção não seta.
+    // Extra roots só em `cargo test` (dois configs sem mutar HOME). Release ignora.
+    #[cfg(test)]
     if let Ok(extra) = std::env::var("HERDR_PET_CLAUDE_ROOTS") {
         for p in extra.split(':') {
             if !p.is_empty() {
@@ -1149,6 +1157,29 @@ mod tests {
             "ambíguo: 2 claude-kind no cwd"
         );
         assert_eq!(out.len(), 2);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn expand_glm_com_pane_sem_marca_no_cwd_nao_chuta() {
+        // Guard conta qualquer possível dono (agent: None), não só claude/glm.
+        let root = tmp_dir("c-glm-none");
+        let cwd = "/tmp/glm-none";
+        write_claude_session(&root, cwd, "sid", Some(("kid", true)), 0);
+        let glm = parent_glm(cwd, "w19:pS");
+        let unmarked = AgentInfo {
+            agent: None,
+            session_id: None,
+            status: AgentStatus::Idle,
+            pane_id: "w19:pX".into(),
+            cwd: Some(cwd.into()),
+            ..parent_claude()
+        };
+        let out = with_claude_cfg(&root, || expand(&[glm.clone(), unmarked.clone()]));
+        assert!(
+            out.iter().all(|a| a.session_id.as_deref() != Some("kid")),
+            "pane sem marca no cwd bloqueia o fallback"
+        );
         let _ = fs::remove_dir_all(root);
     }
 
