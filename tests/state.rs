@@ -250,6 +250,134 @@ fn apply_catchup_reset_genuino_rebobina_sem_creditar_nesse_tick() {
     assert_eq!(s.last_seq_by_pane.get("p"), Some(&40));
 }
 
+// --- C12: eviction de panes ausentes no catch-up ---
+
+#[test]
+fn apply_catchup_mantem_baseline_dos_panes_presentes() {
+    // Quem aparece na observação corrente mantém/atualiza a baseline normalmente.
+    let mut s = State::new(1);
+    s.apply_catchup(&[
+        PaneSeq {
+            pane_id: "w1:pA".into(),
+            seq: 100,
+        },
+        PaneSeq {
+            pane_id: "w2:pB".into(),
+            seq: 200,
+        },
+    ]);
+    s.apply_catchup(&[
+        PaneSeq {
+            pane_id: "w1:pA".into(),
+            seq: 150,
+        },
+        PaneSeq {
+            pane_id: "w2:pB".into(),
+            seq: 250,
+        },
+    ]);
+    assert_eq!(s.last_seq_by_pane.get("w1:pA"), Some(&150));
+    assert_eq!(s.last_seq_by_pane.get("w2:pB"), Some(&250));
+}
+
+#[test]
+fn apply_catchup_evicta_pane_ausente_e_subagente_morto() {
+    // Pane fechado e subagente sintético (pai:filho) que encerrou não deixam
+    // slot eterno: quem não veio na observação corrente sai do mapa.
+    let mut s = State::new(1);
+    s.apply_catchup(&[
+        PaneSeq {
+            pane_id: "w1:pA".into(),
+            seq: 100,
+        },
+        PaneSeq {
+            pane_id: "w2:pMORREU".into(),
+            seq: 50,
+        },
+        PaneSeq {
+            pane_id: "w16:p5:abc-sub".into(),
+            seq: 30,
+        },
+    ]);
+    // Reabertura só com o pane vivo:
+    s.apply_catchup(&[PaneSeq {
+        pane_id: "w1:pA".into(),
+        seq: 120,
+    }]);
+    assert_eq!(s.last_seq_by_pane.len(), 1, "só o pane presente sobrevive");
+    assert!(s.last_seq_by_pane.contains_key("w1:pA"));
+    assert!(!s.last_seq_by_pane.contains_key("w2:pMORREU"), "pane morto evictado");
+    assert!(
+        !s.last_seq_by_pane.contains_key("w16:p5:abc-sub"),
+        "subagente sintético morto evictado"
+    );
+}
+
+#[test]
+fn pane_vivo_ausente_numa_abertura_nao_credita_historico_na_volta() {
+    // Direção da segurança: pane vivo que pisco fora da observação perde a
+    // baseline; na volta é PRIMEIRA-VISTA — 0 XP de histórico, só re-baseline.
+    // No máximo subconta; nunca infla.
+    let mut s = State::new(1);
+    s.apply_catchup(&[PaneSeq {
+        pane_id: "w1:pA".into(),
+        seq: 100,
+    }]);
+    // Abertura em que ele não veio (flicker/pane fechado em outra sessão):
+    s.apply_catchup(&[PaneSeq {
+        pane_id: "w9:pOUTRO".into(),
+        seq: 10,
+    }]);
+    assert!(s.last_seq_by_pane.get("w1:pA").is_none(), "foi evictado");
+    // Volta com 200 de seq — SEM crédito dos 100 "perdidos":
+    let gained = s.apply_catchup(&[PaneSeq {
+        pane_id: "w1:pA".into(),
+        seq: 200,
+    }]);
+    assert_eq!(gained, 0, "primeira-vista: sem crédito histórico");
+    assert_eq!(s.last_seq_by_pane.get("w1:pA"), Some(&200));
+    // E o XP seguinte conta a partir da baseline nova:
+    let gained = s.apply_catchup(&[PaneSeq {
+        pane_id: "w1:pA".into(),
+        seq: 210,
+    }]);
+    assert_eq!(gained, herdr_pet::progression::xp_for_catchup(10));
+}
+
+#[test]
+fn record_seen_seq_nao_evicta_pane_ausente() {
+    // O poll NÃO evicta: pane vivo que pisco fora de um snapshot intermediário
+    // não pode perder a baseline por flicker — senão a próxima observação dele
+    // viraria primeira-vista à toa (perda de catch-up legítimo).
+    let mut s = State::new(1);
+    s.apply_catchup(&[PaneSeq {
+        pane_id: "w1:pA".into(),
+        seq: 100,
+    }]);
+    s.record_seen_seq(&[PaneSeq {
+        pane_id: "w2:pB".into(),
+        seq: 5,
+    }]); // pA sumiu deste poll
+    assert_eq!(
+        s.last_seq_by_pane.get("w1:pA"),
+        Some(&100),
+        "poll não evicta"
+    );
+    // O trabalho de pA durante o pane aberto ainda vira catch-up? Não — mas a
+    // baseline segue coerente pro próximo catch-up contar o delta real.
+    let gained = s.apply_catchup(&[
+        PaneSeq {
+            pane_id: "w1:pA".into(),
+            seq: 160,
+        },
+        PaneSeq {
+            pane_id: "w2:pB".into(),
+            seq: 5,
+        },
+    ]);
+    assert_eq!(gained, herdr_pet::progression::xp_for_catchup(60));
+}
+
 // --- C9: corrupção preservada, save atômico ---
 
 #[test]

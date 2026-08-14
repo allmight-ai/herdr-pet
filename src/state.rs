@@ -68,6 +68,10 @@ impl State {
     /// fechado. `agents`: `(pane_id, seq observado)` de cada agente. Primeira vista de
     /// um pane = baseline (sem creditar); nas seguintes, XP pelo delta. Vários agentes
     /// avançando sofrem o decaimento harmônico (anti-proliferação). Devolve o XP ganho.
+    ///
+    /// Também **expurga** do `last_seq_by_pane` as chaves ausentes da observação
+    /// corrente (C12): pane morto e subagente sintético que encerrou não deixam
+    /// slot eterno no state.json. Só aqui — ver nota em `record_seen_seq`.
     pub fn apply_catchup(&mut self, agents: &[PaneSeq]) -> u64 {
         // Dedupe por pane (maior seq neste tick). Snapshot já descarta pane/seq
         // omitidos; se o mesmo pane vier 2×, o maior valor é o observado.
@@ -92,6 +96,14 @@ impl State {
         for (pane_id, observed) in &latest {
             self.remember_seq(pane_id, *observed);
         }
+        // Eviction (C12): o catch-up roda UMA vez na abertura e vê o conjunto
+        // atual de panes — quem não apareceu (pane fechado, subagente encerrado)
+        // sai do mapa. Isso basta pra conter o crescimento: cada sessão de watch
+        // poda o mapa pro universo corrente. Pane VIVO momentaneamente ausente
+        // perde a baseline e volta como primeira-vista (sem crédito histórico) —
+        // no máximo subconta, nunca infla.
+        self.last_seq_by_pane
+            .retain(|k, _| latest.contains_key(k.as_str()));
         // Largura: 1, ½, ⅓… no ganho (maior primeiro). Não H(n)/n sobre a soma —
         // um tick de 3 XP não pode comer 73 do worker (C7). Ver harmonic_weighted_xp.
         let granted = harmonic_weighted_xp(&mut gains);
@@ -104,6 +116,11 @@ impl State {
     /// contagem). Dedupe pelo maior seq do slice. Se o observado for menor que o last
     /// (reset genuíno do Herdr), a baseline desce; o 0 espúrio da API omitida não
     /// chega — `agent::snapshot` descarta PaneSeq incompleto.
+    ///
+    /// NÃO evicta chaves ausentes (de propósito): o poll roda a cada ~2,4s e um
+    /// pane vivo pode piscar fora do snapshot (agente entre transições) — apagar
+    /// baseline por flicker trocaria a próxima observação por primeira-vista à
+    /// toa. A eviction acontece uma vez por sessão, no `apply_catchup` da abertura.
     pub fn record_seen_seq(&mut self, agents: &[PaneSeq]) {
         let mut latest: HashMap<&str, u64> = HashMap::new();
         for ps in agents {
@@ -138,6 +155,11 @@ impl State {
 /// no dir do plugin (o mesmo do pane), não num `.herdr-pet-state/` órfão do CWD —
 /// um state só, âncora única. O passo 3 mantém o dev que JÁ tinha state local
 /// funcionando; o passo 2 preserva a precedência antiga (install ganha de dev).
+///
+/// Limitação conhecida (aceita): fora do pane o caminho é **reconstruído** do env
+/// do próprio processo (`XDG_STATE_HOME`). Se o shell e o server Herdr rodarem
+/// com envs divergentes, `status`/`init` olham outro lugar que o pane — não há
+/// pointer file; o caso comum (envs iguais) é coberto pelos passos acima.
 pub fn state_dir() -> PathBuf {
     resolve_state_dir(
         std::env::var("HERDR_PLUGIN_STATE_DIR").ok().as_deref(),
