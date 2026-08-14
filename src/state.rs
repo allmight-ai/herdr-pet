@@ -13,7 +13,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use crate::progression::{harmonic_milli, level_for_xp, xp_for_catchup, MILLI};
+use crate::progression::{harmonic_weighted_xp, level_for_xp, xp_for_catchup};
 
 /// Sinal de trabalho de um agente: o `state_change_seq` observado num dado pane.
 /// Conceito do `CONTEXT.md` ("Sinal de trabalho"); é a chave do mapa `last_seq_by_pane`.
@@ -79,31 +79,22 @@ impl State {
                 .or_insert(ps.seq);
         }
         // Ganhos contra o mapa como estava na entrada: um pane não enxerga o insert de outro.
-        let mut linear = 0u64;
-        let mut contributors = 0u64;
+        let mut gains = Vec::new();
         for (pane_id, observed) in &latest {
-            let gained = match self.last_seq_by_pane.get(*pane_id) {
-                Some(&last) => {
-                    let g = xp_for_catchup(observed.saturating_sub(last));
-                    if g > 0 {
-                        contributors += 1;
-                    }
-                    g
-                }
+            let g = match self.last_seq_by_pane.get(*pane_id) {
+                Some(&last) => xp_for_catchup(observed.saturating_sub(last)),
                 None => 0, // primeira vista do pane: baseline, sem creditar histórico
             };
-            linear += gained;
+            if g > 0 {
+                gains.push(g);
+            }
         }
         for (pane_id, observed) in &latest {
             self.remember_seq(pane_id, *observed);
         }
-        // Fator de largura harmonic_milli(N)/N: 1 agente = MILLI (cheio); mais = menos cada.
-        let factor = if contributors > 0 {
-            harmonic_milli(contributors as usize) / contributors
-        } else {
-            0
-        };
-        let granted = linear * factor / MILLI;
+        // Largura: 1, ½, ⅓… no ganho (maior primeiro). Não H(n)/n sobre a soma —
+        // um tick de 3 XP não pode comer 73 do worker (C7). Ver harmonic_weighted_xp.
+        let granted = harmonic_weighted_xp(&mut gains);
         self.xp += granted;
         granted
     }
@@ -282,10 +273,8 @@ mod tests {
     use super::*;
 
     fn tdir(tag: &str, with_state: bool) -> PathBuf {
-        let d = std::env::temp_dir().join(format!(
-            "herdr-pet-resolve-{}-{tag}",
-            std::process::id()
-        ));
+        let d =
+            std::env::temp_dir().join(format!("herdr-pet-resolve-{}-{tag}", std::process::id()));
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         if with_state {

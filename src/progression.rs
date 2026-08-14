@@ -39,11 +39,19 @@ pub struct LevelView {
 pub fn level_view(xp: u64) -> LevelView {
     let level = level_for_xp(xp);
     if level >= 99 {
-        return LevelView { level: 99, xp_into: 0, xp_span: 0 };
+        return LevelView {
+            level: 99,
+            xp_into: 0,
+            xp_span: 0,
+        };
     }
     let base = xp_to_reach(level);
     let next = xp_to_reach(level + 1);
-    LevelView { level, xp_into: xp - base, xp_span: next - base }
+    LevelView {
+        level,
+        xp_into: xp - base,
+        xp_span: next - base,
+    }
 }
 
 // --- earning ---
@@ -102,4 +110,24 @@ pub fn harmonic_milli(n: usize) -> u64 {
     // H(0..=8)×1000: 0, 1000, 1500, 1833, 2083, 2283, 2450, 2593, 2718
     const TABLE: [u64; 9] = [0, 1000, 1500, 1833, 2083, 2283, 2450, 2593, 2718];
     TABLE[n.min(TABLE.len() - 1)]
+}
+
+/// Catch-up: peso harmônico **por** contribuinte, ganhos em ordem decrescente.
+/// `g₀×1 + g₁×½ + g₂×⅓ + …` (C7). Quando os `g` são iguais, Σ g/i = linear·H(n)/n
+/// — o mesmo teto de largura de antes. Um tick pequeno só paga o próprio 1/k,
+/// não taxa o worker (300 + 3/2 = 301, não 227).
+///
+/// Inteiro: `Σ (gᵢ · MILLI / (i+1)) / MILLI` — multiplica antes de dividir,
+/// sem o `H(n)/n` truncado do catch-up antigo (C12).
+pub fn harmonic_weighted_xp(gains: &mut [u64]) -> u64 {
+    if gains.is_empty() {
+        return 0;
+    }
+    gains.sort_unstable_by(|a, b| b.cmp(a));
+    let mut milli = 0u64;
+    for (i, g) in gains.iter().enumerate() {
+        let rank = (i + 1) as u64;
+        milli += *g * MILLI / rank;
+    }
+    milli / MILLI
 }

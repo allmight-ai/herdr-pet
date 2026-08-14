@@ -112,8 +112,42 @@ fn apply_catchup_multiplos_agentes_aplica_curva_harmonica() {
         },
     ]);
     let linear = 2 * herdr_pet::progression::xp_for_catchup(50);
+    // Ganhos iguais: Σ g/i = linear·H(2)/2 = o valor antigo (225).
     assert_eq!(gained, linear * 750 / 1000);
     assert!(gained < linear, "a curva tem que reduzir vs linear");
+}
+
+#[test]
+fn apply_catchup_tick_pequeno_nao_taxa_o_worker() {
+    // C7: worker delta 100 (300 XP) + idle delta 1 (3 XP) não pode virar 227.
+    // Peso por ganho, maior primeiro: 300×1 + 3×½ = 301.
+    let mut s = State::new(1);
+    s.apply_catchup(&[
+        PaneSeq {
+            pane_id: "worker".into(),
+            seq: 10,
+        },
+        PaneSeq {
+            pane_id: "idle".into(),
+            seq: 1,
+        },
+    ]);
+    let gained = s.apply_catchup(&[
+        PaneSeq {
+            pane_id: "worker".into(),
+            seq: 110,
+        },
+        PaneSeq {
+            pane_id: "idle".into(),
+            seq: 2,
+        },
+    ]);
+    let worker = herdr_pet::progression::xp_for_catchup(100);
+    let idle = herdr_pet::progression::xp_for_catchup(1);
+    assert_eq!(worker, 300);
+    assert_eq!(idle, 3);
+    assert_eq!(gained, 301, "300 + 3/2, não 227 da taxa H(2)/n na soma");
+    assert!(gained >= worker, "o worker não pode perder XP pro flicker");
 }
 
 #[test]
@@ -223,7 +257,8 @@ fn state_truncado_vira_none_e_preserva_corrupt() {
     // Ilegível ⇒ None (auto-init pode recriar), MAS o conteúdo é preservado em
     // `<path>.corrupt` antes de qualquer coisa — nunca destruído em silêncio.
     let path = tmp("corrupt");
-    let original = r#"{"anchor":"github:1","github_id":1,"active_index":0,"hatched":[0],"xp":48000,"last"#;
+    let original =
+        r#"{"anchor":"github:1","github_id":1,"active_index":0,"hatched":[0],"xp":48000,"last"#;
     std::fs::write(&path, original).unwrap();
     assert!(load_from(&path).is_none());
     let corrupt = PathBuf::from(format!("{}.corrupt", path.display()));
@@ -236,7 +271,10 @@ fn state_truncado_vira_none_e_preserva_corrupt() {
     // Segunda carga do mesmo arquivo ilegível: empilha (.corrupt.1), não sobrescreve.
     assert!(load_from(&path).is_none());
     let second = PathBuf::from(format!("{}.corrupt.1", path.display()));
-    assert!(second.is_file(), "segunda preserva empilha sem sobrescrever");
+    assert!(
+        second.is_file(),
+        "segunda preserva empilha sem sobrescrever"
+    );
     let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_file(&corrupt);
     let _ = std::fs::remove_file(&second);
@@ -248,7 +286,10 @@ fn save_to_nao_deixa_tmp_e_produz_arquivo_valido() {
     let path = tmp("atomic");
     let s = State::new(3);
     save_to(&path, &s).unwrap();
-    assert!(!path.with_extension("tmp-herdr-pet").exists(), "sem tmp lixo");
+    assert!(
+        !path.with_extension("tmp-herdr-pet").exists(),
+        "sem tmp lixo"
+    );
     assert_eq!(load_from(&path).unwrap().github_id, 3);
     let _ = std::fs::remove_file(&path);
 }

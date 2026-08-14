@@ -8,7 +8,8 @@
 use std::time::Duration;
 
 use herdr_pet::progression::{
-    harmonic_milli, level_for_xp, level_view, xp_for_catchup, xp_to_reach, Accrual,
+    harmonic_milli, harmonic_weighted_xp, level_for_xp, level_view, xp_for_catchup, xp_to_reach,
+    Accrual,
 };
 
 // --- curva ---
@@ -58,7 +59,10 @@ fn mais_xp_nunca_diminui_o_nivel() {
     let mut anterior = level_for_xp(0);
     for xp in (1..=485_100).step_by(97) {
         let atual = level_for_xp(xp);
-        assert!(atual >= anterior, "nível diminuiu em xp={xp}: {atual} < {anterior}");
+        assert!(
+            atual >= anterior,
+            "nível diminuiu em xp={xp}: {atual} < {anterior}"
+        );
         anterior = atual;
     }
 }
@@ -69,7 +73,10 @@ fn cada_nivel_pede_mais_xp_que_o_anterior() {
     let mut custo_anterior = 0u64;
     for nivel in 2..=99u8 {
         let custo = xp_to_reach(nivel) - xp_to_reach(nivel - 1);
-        assert!(custo > custo_anterior, "transição parou de crescer no nível {nivel}");
+        assert!(
+            custo > custo_anterior,
+            "transição parou de crescer no nível {nivel}"
+        );
         custo_anterior = custo;
     }
 }
@@ -112,7 +119,10 @@ fn accrual_acumula_sub_xp_sem_perder() {
 #[test]
 fn catchup_cresce_e_teto() {
     assert_eq!(xp_for_catchup(0), 0);
-    assert!(xp_for_catchup(5) < xp_for_catchup(50), "deve crescer com delta");
+    assert!(
+        xp_for_catchup(5) < xp_for_catchup(50),
+        "deve crescer com delta"
+    );
     // Teto: deltas gigantes não inflacionam (granularidade do seq é incerta).
     assert_eq!(xp_for_catchup(10_000), xp_for_catchup(100_000));
 }
@@ -169,4 +179,20 @@ fn harmonic_satura_e_eh_monotono() {
         assert!(v >= anterior, "deixou de ser monótono em n={n}");
         anterior = v;
     }
+}
+
+#[test]
+fn harmonic_weighted_iguais_bate_h_sobre_n() {
+    // 2×150: 150 + 75 = 225 = 300 × H(2)/2.
+    let mut g = [150, 150];
+    assert_eq!(harmonic_weighted_xp(&mut g), 225);
+    let mut one = [80];
+    assert_eq!(harmonic_weighted_xp(&mut one), 80);
+    assert_eq!(harmonic_weighted_xp(&mut []), 0);
+}
+
+#[test]
+fn harmonic_weighted_tick_nao_taxa_o_maior() {
+    let mut g = [300, 3];
+    assert_eq!(harmonic_weighted_xp(&mut g), 301);
 }
