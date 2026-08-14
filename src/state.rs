@@ -300,12 +300,36 @@ pub fn save_to(path: &Path, state: &State) -> std::io::Result<()> {
 /// no rename (JSON inválido, pior que o `fs::write` antigo).
 pub fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
     let tmp = tmp_sibling(path);
+    if let Some(dir) = path.parent() {
+        sweep_orphan_tmps(dir, &tmp);
+    }
     {
         let mut f = fs::File::create(&tmp)?;
         f.write_all(data)?;
         f.sync_all()?;
     }
     fs::rename(&tmp, path)
+}
+
+/// Remove tmps órfãos de processos que morreram entre create e rename (o crash
+/// deixava `*.tmp-herdr-pet-<pid>` no diretório pra sempre). Best-effort: erros
+/// ignorados; o tmp do pid corrente (`own_tmp`) é poupado. Varredura acontece só
+/// ao salvar — não há varredura "de passagem" em comandos só-leitura.
+fn sweep_orphan_tmps(dir: &Path, own_tmp: &Path) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
+        let p = e.path();
+        if p == own_tmp {
+            continue;
+        }
+        let Some(name) = p.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        // O marcador sem o sufixo de pid cobre também sobras do formato antigo.
+        if name.contains("tmp-herdr-pet") {
+            let _ = fs::remove_file(&p);
+        }
+    }
 }
 
 /// Nome do tmp do `write_atomic` pra este processo.
@@ -394,5 +418,31 @@ mod tests {
             name,
             format!("state.tmp-herdr-pet-{}", std::process::id())
         );
+    }
+
+    #[test]
+    fn write_atomic_varre_tmps_orfaos_de_outros_pids() {
+        // Crash entre create e rename deixava tmp órfão pra sempre. O próximo
+        // save de QUALQUER processo remove os tmps que não são dele — inclusive
+        // sobras do formato antigo (sem pid). Demais arquivos ficam intocados.
+        let dir = std::env::temp_dir().join(format!("herdr-pet-sweep-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let orphan = dir.join(format!("state.tmp-herdr-pet-{}", u32::MAX)); // pid impossível
+        let legacy = dir.join("state.tmp-herdr-pet"); // formato antigo
+        let keep = dir.join("state.json.corrupt");
+        fs::write(&orphan, b"...").unwrap();
+        fs::write(&legacy, b"...").unwrap();
+        fs::write(&keep, b"...").unwrap();
+
+        let target = dir.join("state.json");
+        let s = State::new(1);
+        save_to(&target, &s).unwrap();
+
+        assert!(!orphan.exists(), "tmp órfão de outro pid removido");
+        assert!(!legacy.exists(), "sobra do formato antigo removida");
+        assert!(keep.exists(), "arquivo sem relação alguma é poupado");
+        assert!(load_from(&target).is_some(), "o save em si funcionou");
+        let _ = fs::remove_dir_all(&dir);
     }
 }

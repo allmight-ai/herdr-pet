@@ -414,12 +414,20 @@ fn main() {
                 herdr_pet::render::render_casinha(&primordial, 0, herdr_pet::AgentStatus::Idle, None)
             );
         }
-        Cmd::Status => match herdr_pet::state::load() {
-            Some(s) => {
+        Cmd::Status => match herdr_pet::state::load_outcome() {
+            herdr_pet::state::LoadOutcome::Loaded(s) => {
                 print_pet(&hatch(s.github_id, s.active_index));
                 print_progress(&s);
             }
-            None => println!(
+            // O aviso detalhado (caminho + erro) já saiu no stderr do load.
+            // Sem sugerir `init`: ele vai RECUSAR enquanto o acesso não for corrigido.
+            herdr_pet::state::LoadOutcome::Unreadable => println!(
+                "herdr-pet — state presente mas ilegível (permissão?). Corrija o acesso ao arquivo indicado acima e rode de novo."
+            ),
+            // `Corrupt`: o conteúdo já foi preservado em `.corrupt` e o init pode
+            // recriar com segurança — a orientação abaixo segue válida nos dois casos.
+            herdr_pet::state::LoadOutcome::Missing
+            | herdr_pet::state::LoadOutcome::Corrupt => println!(
                 "herdr-pet — sem state ainda. Rode `herdr-pet init` ou abra o pane `watch` (auto-init)."
             ),
         },
