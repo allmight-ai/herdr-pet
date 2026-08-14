@@ -99,6 +99,14 @@ fn main() {
             let (mut state, persist) = match (herdr_pet::state::load(), id) {
                 (Some(s), _) => (s, true),
                 (None, Some(i)) => (herdr_pet::state::State::new(i), false), // dev transitório
+                // `--mood` é modo dev de display: não auto-inicializa state (criar
+                // state é gravação) — sem state, exige `--id`.
+                (None, None) if forced.is_some() => {
+                    eprintln!(
+                        "modo dev (--mood): sem state e sem --id\n(passe `--id N` — o modo dev não cria state)"
+                    );
+                    std::process::exit(1);
+                }
                 (None, None) => match herdr_pet::anchor::ensure_locked_state() {
                     Ok(s) => (s, true),
                     Err(e) => {
@@ -110,6 +118,8 @@ fn main() {
                     }
                 },
             };
+            // Com `--mood` o state (se houver) é só leitura: exibe o pet, nunca grava.
+            let persist = persist && forced.is_none();
             let gid = state.github_id;
             let idx = state.active_index;
 
@@ -143,7 +153,8 @@ fn main() {
 
             // Sessão começa no XP/nível de disco — o catch-up entra no delta do resumo.
             let mut session = Session::start(state.xp, state.level());
-            if matches!(status, herdr_pet::AgentStatus::Working) {
+            // O mood forçado não entra no resumo como agente — não houve trabalho real.
+            if forced.is_none() && matches!(status, herdr_pet::AgentStatus::Working) {
                 session.note_working(std::iter::empty::<&str>(), n_working);
             }
 
@@ -191,10 +202,11 @@ fn main() {
                     session.note_working(&snap.working_panes, snap.n_working);
                 }
                 // XP live: ritmo base × H(n_working). Sem working → multiplicador 0 → nada.
+                // `--mood` zera o multiplicador: humor forçado não é trabalho real.
                 let now = Instant::now();
                 let dt = now.duration_since(last_instant);
                 last_instant = now;
-                let mult = harmonic_milli(n_working);
+                let mult = if forced.is_some() { 0 } else { harmonic_milli(n_working) };
                 if mult > 0 {
                     state.xp += accrual.add_working(dt, mult);
                 }
