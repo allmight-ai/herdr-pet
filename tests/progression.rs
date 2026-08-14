@@ -196,3 +196,30 @@ fn harmonic_weighted_tick_nao_taxa_o_maior() {
     let mut g = [300, 3];
     assert_eq!(harmonic_weighted_xp(&mut g), 301);
 }
+
+#[test]
+fn harmonic_weighted_satura_em_oito_como_o_live() {
+    // n=20 iguais: g·H(8) = g·2718/1000 — o teto antigo, não H(20)≈3,60×.
+    let g = 1000u64;
+    let mut twenty = [g; 20];
+    assert_eq!(
+        harmonic_weighted_xp(&mut twenty),
+        g * harmonic_milli(8) / 1000
+    );
+    let mut eight = [g; 8];
+    assert_eq!(
+        harmonic_weighted_xp(&mut twenty),
+        harmonic_weighted_xp(&mut eight)
+    );
+}
+
+#[test]
+fn harmonic_weighted_rank_alem_de_oito_e_zero() {
+    // 8 workers grandes + tick no 9º: o flicker não pontua.
+    let mut g = [100, 100, 100, 100, 100, 100, 100, 100, 3];
+    let mut top8 = [100u64; 8];
+    assert_eq!(
+        harmonic_weighted_xp(&mut g),
+        harmonic_weighted_xp(&mut top8)
+    );
+}

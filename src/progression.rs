@@ -113,21 +113,22 @@ pub fn harmonic_milli(n: usize) -> u64 {
 }
 
 /// Catch-up: peso harmônico **por** contribuinte, ganhos em ordem decrescente.
-/// `g₀×1 + g₁×½ + g₂×⅓ + …` (C7). Quando os `g` são iguais, Σ g/i = linear·H(n)/n
-/// — o mesmo teto de largura de antes. Um tick pequeno só paga o próprio 1/k,
-/// não taxa o worker (300 + 3/2 = 301, não 227).
+/// Só os **8 maiores** pontuam (ranks 1..=8, pesos ΔH da tabela ≈ 1, ½, …, ⅛);
+/// do 9º em diante o peso é 0 — a mesma saturação do live (`harmonic_milli`
+/// teto 8 ⇒ 2,718×). Um tick pequeno no top-8 só paga o próprio ΔH (C7:
+/// 300 + 3/2 = 301, não 227); em rank > 8 não paga nada.
 ///
-/// Inteiro: `Σ (gᵢ · MILLI / (i+1)) / MILLI` — multiplica antes de dividir,
-/// sem o `H(n)/n` truncado do catch-up antigo (C12).
+/// Ganhos iguais: `g·H(min(n,8))` = o teto antigo `linear·H(min(n,8))/n`.
+/// Inteiro: `Σ (gᵢ · ΔHᵢ) / MILLI` — ΔH já é milli, sem truncar H/n (C12).
 pub fn harmonic_weighted_xp(gains: &mut [u64]) -> u64 {
     if gains.is_empty() {
         return 0;
     }
     gains.sort_unstable_by(|a, b| b.cmp(a));
     let mut milli = 0u64;
-    for (i, g) in gains.iter().enumerate() {
-        let rank = (i + 1) as u64;
-        milli += *g * MILLI / rank;
+    for (i, g) in gains.iter().take(8).enumerate() {
+        let w = harmonic_milli(i + 1) - harmonic_milli(i);
+        milli += *g * w;
     }
     milli / MILLI
 }
