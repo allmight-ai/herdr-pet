@@ -638,11 +638,18 @@ fn notify_session(line: &str) {
 /// inteiro por cima um do outro (last-writer-wins perde XP e regredi as
 /// baselines de seq, que o próximo catch-up repaga). Então:
 /// - pet aberto NO workspace focado → fecha (toggle de sempre);
-/// - pet aberto em OUTRO workspace → fecha lá (com farewell) e reabre aqui:
-///   "move" — o pet acompanha o usuário pra onde ele foi trabalhar.
+/// - pet aberto em OUTRO workspace → "move": fecha o de lá (com farewell) e
+///   reabre aqui embaixo do pane focado — o pet acompanha o usuário pra onde
+///   ele foi trabalhar. Pré-condições do open (pane alvo) são resolvidas
+///   ANTES de fechar: se não há pra onde reabrir, o pet fica onde está —
+///   nunca fica sem pet nenhum por falha de API.
+///
+/// Limitação conhecida (deixada aberta por decisão): `herdr plugin pane open`
+/// chamado DIRETO (fora deste toggle) ainda pode criar um segundo watch. O
+/// lock tmp-com-pid no save reduz o dano a lost-update, sem corrupção; um
+/// lock de arquivo de verdade é follow-up.
 /// Leve — o `watch` só roda enquanto aberto.
 fn open_pet_small() -> Result<(), String> {
-    const PLUGIN_ID: &str = "allmight-ai.herdr-pet";
     let bin = herdr_bin();
 
     // Prefer API focus (hotkey/action context) over HERDR_WORKSPACE_ID — the env
@@ -658,14 +665,33 @@ fn open_pet_small() -> Result<(), String> {
             (Some(h), Some(w)) => h == w,
             _ => true,
         });
-        for (existing, _) in &pets {
-            close_pet_with_farewell(&bin, existing);
-        }
         if in_this_ws {
+            for (existing, _) in &pets {
+                close_pet_with_farewell(&bin, existing);
+            }
             let ids: Vec<&str> = pets.iter().map(|(id, _)| id.as_str()).collect();
             println!("✓ pet fechado ({}).", ids.join(", "));
             return Ok(());
         }
+    }
+
+    // pane alvo = o focado (via API — mais robusto que a env var HERDR_PANE_ID).
+    // No braço move isso roda ANTES de fechar o pet existente: sem alvo pra
+    // reabrir, o pet fica onde está (erro impresso) em vez de sumir dos dois.
+    let target = match focused_pane() {
+        Ok(t) => t,
+        Err(e) if !pets.is_empty() => {
+            println!(
+                "! não movi o pet: sem pane pra reabrir aqui ({e}) — ele segue aberto onde estava."
+            );
+            return Ok(());
+        }
+        Err(e) => return Err(e),
+    };
+
+    if !pets.is_empty() {
+        // Move: agora que o alvo está garantido, fecha o pet do outro workspace
+        // (com farewell) e reabre aqui embaixo.
         let from: Vec<String> = pets
             .iter()
             .map(|(id, ws)| match ws {
@@ -674,19 +700,27 @@ fn open_pet_small() -> Result<(), String> {
             })
             .collect();
         println!(
-            "✓ pet movido pra cá (fechei {} em outro workspace); reabrindo…",
+            "✓ pet movido pra cá (fechando {} em outro workspace); reabrindo…",
             from.join(", ")
         );
+        for (existing, _) in &pets {
+            close_pet_with_farewell(&bin, existing);
+        }
     }
 
-    // pane alvo = o focado (via API — mais robusto que a env var HERDR_PANE_ID)
-    let target = focused_pane()?;
+    open_pet_split(&bin, &target)
+}
+
+/// Passos pós-decisão do `open`: cria o pane do pet dockado embaixo do
+/// `target`, ajeita a altura pra banda [16,18] e refoca o pane original.
+fn open_pet_split(bin: &str, target: &str) -> Result<(), String> {
+    const PLUGIN_ID: &str = "allmight-ai.herdr-pet";
 
     // 1) abre o pet dockado abaixo do pane atual (split)
-    let out = std::process::Command::new(&bin)
+    let out = std::process::Command::new(bin)
         .args([
             "plugin", "pane", "open", "--plugin", PLUGIN_ID, "--entrypoint", "lcd",
-            "--placement", "split", "--target-pane", &target, "--direction", "down",
+            "--placement", "split", "--target-pane", target, "--direction", "down",
         ])
         .output()
         .map_err(|e| format!("não consegui rodar `herdr`: {e}"))?;
@@ -700,20 +734,20 @@ fn open_pet_small() -> Result<(), String> {
     // 2) ajeita o tamanho na banda [16,18]: encolhe se >18, cresce se <16.
     //    Abaixo de 16 o topo (nome) rola fora da viewport pequena.
     for _ in 0..20 {
-        match resize_pet_height(&bin, &pet, "down", 0.02) {
+        match resize_pet_height(bin, &pet, "down", 0.02) {
             Some(h) if h > 18 => {}
             _ => break,
         }
     }
     for _ in 0..24 {
-        match resize_pet_height(&bin, &pet, "up", 0.04) {
+        match resize_pet_height(bin, &pet, "up", 0.04) {
             Some(h) if h < 16 => {}
             _ => break,
         }
     }
 
     // 3) refoca o pane original (vizinho de cima do pet)
-    let _ = std::process::Command::new(&bin)
+    let _ = std::process::Command::new(bin)
         .args(["pane", "focus", "--pane", &pet, "--direction", "up"])
         .output();
 
