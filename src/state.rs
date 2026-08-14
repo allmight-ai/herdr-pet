@@ -186,39 +186,86 @@ pub fn state_path() -> PathBuf {
     state_dir().join("state.json")
 }
 
-/// Carrega de um caminho explícito (testável, sem depender de env var global).
-///
-/// Ausente → `None` (o auto-init pode criar). Presente mas **ilegível**
-/// (truncado/corrompido) → preserva ANTES de desistir: copia o conteúdo pra
-/// `<path>.corrupt` (numerando se já houver — nunca sobrescreve a cópia
-/// anterior) e avisa no stderr; só então devolve `None`. O auto-init recria o
-/// state, mas os dados antigos nunca são destruídos silenciosamente (C9).
-pub fn load_from(path: &Path) -> Option<State> {
+/// Resultado de um load: distingue POR QUE não carregou, porque as consequências
+/// mudam (C9 rodada 2).
+#[derive(Debug)]
+pub enum LoadOutcome {
+    /// State carregado.
+    Loaded(State),
+    /// Arquivo ausente: o auto-init pode criar.
+    Missing,
+    /// Arquivo lido mas não parseia — o conteúdo JÁ foi preservado em
+    /// `<path>.corrupt` antes de chegar aqui; recriar por cima é seguro.
+    Corrupt,
+    /// Arquivo presente cujos bytes NÃO puderam ser lidos (ex.: modo 000) — não
+    /// há como preservar o que não se lê. Os dados presumivelmente estão intactos:
+    /// **recriar por cima os destruiria** (`rename` funciona mesmo com o alvo
+    /// ilegível). O chamador não deve salvar neste caminho.
+    Unreadable,
+}
+
+/// Carrega de um caminho explícito distinguindo o motivo da falha (ver
+/// `LoadOutcome`). Emite os avisos no stderr.
+pub fn load_from_outcome(path: &Path) -> LoadOutcome {
     let data = match fs::read(path) {
         Ok(d) => d,
-        Err(_) => return None, // ausente (ou inacessível): sem state
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return LoadOutcome::Missing,
+        Err(e) => {
+            // Presente mas ilegível SEM ler os bytes: nada a preservar, nada a
+            // recriar por cima — avisa e sinaliza pro chamador não salvar.
+            eprintln!(
+                "herdr-pet: state {} não pôde ser lido ({e}) — NADA foi alterado; \
+                 corrija o acesso ao arquivo antes de rodar de novo",
+                path.display()
+            );
+            return LoadOutcome::Unreadable;
+        }
     };
     match serde_json::from_slice(&data) {
-        Ok(s) => Some(s),
+        Ok(s) => LoadOutcome::Loaded(s),
         Err(e) => {
             let dest = preserve_corrupt(path, &data);
             eprintln!("{}", corrupt_warning(path, &dest, &e));
-            None
+            LoadOutcome::Corrupt
         }
     }
 }
 
-/// Copia o conteúdo ilegível pra `<path>.corrupt` (`.corrupt.1`, `.2`, … se já
-/// houver — preservas empilham sem sobrescrever). Devolve o destino usado.
-fn preserve_corrupt(path: &Path, data: &[u8]) -> PathBuf {
-    let mut dest = corrupt_sibling(path, "");
-    let mut n = 0;
-    while dest.exists() {
-        n += 1;
-        dest = corrupt_sibling(path, &format!(".{n}"));
+/// Carrega de um caminho explícito (testável, sem depender de env var global).
+///
+/// Compat (`Option`): `Loaded` → `Some`; qualquer outro caso → `None`. Quem
+/// precisa decidir entre recriar ou não usa `load_from_outcome`.
+pub fn load_from(path: &Path) -> Option<State> {
+    match load_from_outcome(path) {
+        LoadOutcome::Loaded(s) => Some(s),
+        _ => None,
     }
-    let _ = fs::write(&dest, data);
-    dest
+}
+
+/// Copia o conteúdo ilegível pra `<path>.corrupt` (`.corrupt.1`, `.2`, … se já
+/// houver — preservas **diferentes** empilham sem sobrescrever). Cópia idêntica
+/// a uma preserva existente NÃO empilha de novo (rodar `status` três vezes
+/// não gera três arquivos iguais). Devolve o destino usado.
+fn preserve_corrupt(path: &Path, data: &[u8]) -> PathBuf {
+    let mut n = 0;
+    loop {
+        let dest = corrupt_sibling(path, &if n == 0 {
+            String::new()
+        } else {
+            format!(".{n}")
+        });
+        match fs::read(&dest) {
+            Ok(existing) if existing == data => return dest, // já preservado idêntico
+            Ok(_) => {
+                n += 1; // preserva diferente ocupa este slot — tenta o próximo
+            }
+            Err(_) => {
+                // slot livre (ou incomparável): grava aqui
+                let _ = fs::write(&dest, data);
+                return dest;
+            }
+        }
+    }
 }
 
 fn corrupt_sibling(path: &Path, suffix: &str) -> PathBuf {
@@ -248,8 +295,11 @@ pub fn save_to(path: &Path, state: &State) -> std::io::Result<()> {
 
 /// Gravação atômica: escreve num tmp no mesmo diretório, dá fsync e renomeia.
 /// Morava em `setup.rs`; movida pra cá pra o state usar o mesmo mecanismo.
+/// O tmp leva o PID no nome: dois processos `watch` salvando ao mesmo tempo
+/// escrevem tmps DIFERENTES — tmp de nome fixo entregaria bytes intercalados
+/// no rename (JSON inválido, pior que o `fs::write` antigo).
 pub fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
-    let tmp = path.with_extension("tmp-herdr-pet");
+    let tmp = tmp_sibling(path);
     {
         let mut f = fs::File::create(&tmp)?;
         f.write_all(data)?;
@@ -258,9 +308,19 @@ pub fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
     fs::rename(&tmp, path)
 }
 
+/// Nome do tmp do `write_atomic` pra este processo.
+fn tmp_sibling(path: &Path) -> PathBuf {
+    path.with_extension(format!("tmp-herdr-pet-{}", std::process::id()))
+}
+
 /// Carrega do state padrão.
 pub fn load() -> Option<State> {
     load_from(&state_path())
+}
+
+/// Carrega do state padrão distinguindo o motivo da falha (ver `LoadOutcome`).
+pub fn load_outcome() -> LoadOutcome {
+    load_from_outcome(&state_path())
 }
 
 /// Salva no state padrão.
@@ -322,5 +382,17 @@ mod tests {
         let xdg = tdir("d", false);
         let d = resolve_state_dir(None, Some(xdg.clone()), None);
         assert_eq!(d, xdg);
+    }
+
+    #[test]
+    fn tmp_do_write_atomic_leva_o_pid() {
+        // Dois processos salvando ao mesmo tempo não podem compartilhar o tmp:
+        // mesmo nome = bytes intercalados no rename.
+        let t = tmp_sibling(Path::new("d/state.json"));
+        let name = t.file_name().unwrap().to_str().unwrap();
+        assert_eq!(
+            name,
+            format!("state.tmp-herdr-pet-{}", std::process::id())
+        );
     }
 }

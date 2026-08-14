@@ -268,28 +268,99 @@ fn state_truncado_vira_none_e_preserva_corrupt() {
         original,
         "cópia .corrupt com o conteúdo original"
     );
-    // Segunda carga do mesmo arquivo ilegível: empilha (.corrupt.1), não sobrescreve.
-    assert!(load_from(&path).is_none());
-    let second = PathBuf::from(format!("{}.corrupt.1", path.display()));
-    assert!(
-        second.is_file(),
-        "segunda preserva empilha sem sobrescrever"
-    );
     let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_file(&corrupt);
-    let _ = std::fs::remove_file(&second);
+}
+
+#[test]
+fn corrupt_repetido_nao_empilha_copia_identica() {
+    // Rodar `status` N vezes no mesmo arquivo quebrado não pode gerar N cópias
+    // iguais (.corrupt, .1, .2, …): carga repetida reutiliza a preserva idêntica.
+    // Conteúdo DIFERENTE empilha (preserva anterior fica intacta).
+    let path = tmp("corrupt-dedup");
+    let a = r#"{"anchor":"github:1","github_id":1,"active_index":0,"hatched":[0],"xp":1,"la"#;
+    std::fs::write(&path, a).unwrap();
+    for _ in 0..3 {
+        assert!(load_from(&path).is_none());
+    }
+    let c0 = PathBuf::from(format!("{}.corrupt", path.display()));
+    let c1 = PathBuf::from(format!("{}.corrupt.1", path.display()));
+    assert!(c0.is_file());
+    assert!(!c1.exists(), "cópia idêntica não empilha");
+    assert_eq!(std::fs::read_to_string(&c0).unwrap(), a);
+    // Quebra DIFERENTE no state.json → essa sim empilha (.corrupt.1).
+    let b = r#"{"anchor":"github:2","outra-quebra""#;
+    std::fs::write(&path, b).unwrap();
+    assert!(load_from(&path).is_none());
+    assert!(c1.is_file(), "conteúdo diferente empilha");
+    assert_eq!(
+        std::fs::read_to_string(&c1).unwrap(),
+        b,
+        "preserva nova com o conteúdo novo"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&c0).unwrap(),
+        a,
+        "preserva anterior intacta"
+    );
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&c0);
+    let _ = std::fs::remove_file(&c1);
 }
 
 #[test]
 fn save_to_nao_deixa_tmp_e_produz_arquivo_valido() {
-    // Atômico (tmp+fsync+rename): depois do save não sobra tmp e o arquivo carrega.
+    // Atômico (tmp+fsync+rename): depois do save não sobra tmp (com o PID no
+    // nome) e o arquivo carrega.
     let path = tmp("atomic");
     let s = State::new(3);
     save_to(&path, &s).unwrap();
     assert!(
-        !path.with_extension("tmp-herdr-pet").exists(),
+        !path
+            .with_extension(format!("tmp-herdr-pet-{}", std::process::id()))
+            .exists(),
         "sem tmp lixo"
     );
     assert_eq!(load_from(&path).unwrap().github_id, 3);
+    let _ = std::fs::remove_file(&path);
+}
+
+// --- C9 rodada 2: ausente ≠ ilegível-sem-ler ≠ corrompido ---
+
+#[test]
+fn state_ausente_e_missing_nao_unreadable() {
+    use herdr_pet::state::{load_from_outcome, LoadOutcome};
+    let path = tmp("nunca-criado");
+    match load_from_outcome(&path) {
+        LoadOutcome::Missing => {}
+        other => panic!("arquivo ausente deveria ser Missing, veio {other:?}"),
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn state_sem_permissao_e_unreadable_e_o_conteudo_sobrevive() {
+    // Modo 000: não dá nem pra LER os bytes — não há como preservar, então o
+    // sinal é "não recrie por cima". Nada é gravado; o conteúdo intacto volta
+    // quando o acesso é corrigido.
+    use std::os::unix::fs::PermissionsExt;
+    use herdr_pet::state::{load_from_outcome, LoadOutcome};
+    let path = tmp("modo000");
+    std::fs::write(
+        &path,
+        r#"{"anchor":"github:1","github_id":1,"active_index":0,"hatched":[0],"xp":48000,"last_seq_by_pane":{}}"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+    match load_from_outcome(&path) {
+        LoadOutcome::Unreadable => {}
+        other => panic!("modo 000 deveria ser Unreadable, veio {other:?}"),
+    }
+    assert!(load_from(&path).is_none(), "compat Option continua None");
+    // Nenhum .corrupt foi criado (não havia bytes pra preservar)…
+    assert!(!PathBuf::from(format!("{}.corrupt", path.display())).exists());
+    // …e o arquivo segue INTACTO — corrigindo a permissão, os 48.000 XP estão lá.
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(load_from(&path).unwrap().xp, 48_000);
     let _ = std::fs::remove_file(&path);
 }
