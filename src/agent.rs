@@ -74,10 +74,12 @@ struct AgentEntry {
     workspace_id: Option<String>,
     #[serde(default)]
     terminal_title_stripped: Option<String>,
+    /// Ausente ≠ 0: 0 real (Herdr resetou o seq) tem que chegar ao catch-up.
     #[serde(default)]
-    state_change_seq: u64,
+    state_change_seq: Option<u64>,
+    /// Ausente ≠ "": pane sem id não entra no mapa de seq.
     #[serde(default)]
-    pane_id: String,
+    pane_id: Option<String>,
     #[serde(default)]
     agent: Option<String>,
     #[serde(default)]
@@ -98,7 +100,8 @@ struct AgentSession {
 pub struct AgentInfo {
     pub status: AgentStatus,
     pub title: Option<String>,
-    pub state_change_seq: u64,
+    /// `None` = Herdr omitiu o campo. `Some(0)` = seq real zero (reset).
+    pub state_change_seq: Option<u64>,
     pub pane_id: String,
     pub workspace_id: Option<String>,
     pub focused: bool,
@@ -130,7 +133,7 @@ fn entry_to_info(a: &AgentEntry) -> AgentInfo {
         status: AgentStatus::from_herdr(&a.agent_status),
         title,
         state_change_seq: a.state_change_seq,
-        pane_id: a.pane_id.clone(),
+        pane_id: a.pane_id.clone().unwrap_or_default(),
         workspace_id: a.workspace_id.clone(),
         focused: a.focused,
         agent: a.agent.clone(),
@@ -157,7 +160,11 @@ pub fn focused_agent_info() -> Option<AgentInfo> {
     let pick = agents
         .iter()
         .find(|a| a.focused)
-        .or_else(|| agents.iter().find(|a| a.workspace_id.as_deref() == ws.as_deref()))
+        .or_else(|| {
+            agents
+                .iter()
+                .find(|a| a.workspace_id.as_deref() == ws.as_deref())
+        })
         .or_else(|| agents.first())?;
     Some(entry_to_info(pick))
 }
@@ -185,7 +192,11 @@ pub fn aggregate_display(agents: &[AgentInfo]) -> (AgentStatus, Vec<String>) {
     let focused = agents
         .iter()
         .find(|a| a.focused)
-        .or_else(|| agents.iter().find(|a| a.workspace_id.as_deref() == ws.as_deref()))
+        .or_else(|| {
+            agents
+                .iter()
+                .find(|a| a.workspace_id.as_deref() == ws.as_deref())
+        })
         .or_else(|| agents.first());
 
     if agents
@@ -245,11 +256,19 @@ pub fn snapshot(agents: &[AgentInfo]) -> AgentsSnapshot {
         debug_assert!(!matches!(st, AgentStatus::Working));
         (st, ts)
     };
+    // Sem pane_id ou sem seq → não gera PaneSeq. O 0/"" de `serde(default)`
+    // antigo virava baseline falsa e replay de catch-up; agora o omitido
+    // morre aqui e o 0 que passa é reset genuíno do Herdr.
     let pane_seqs = agents
         .iter()
-        .map(|a| PaneSeq {
-            pane_id: a.pane_id.clone(),
-            seq: a.state_change_seq,
+        .filter_map(|a| {
+            if a.pane_id.is_empty() {
+                return None;
+            }
+            Some(PaneSeq {
+                pane_id: a.pane_id.clone(),
+                seq: a.state_change_seq?,
+            })
         })
         .collect();
     AgentsSnapshot {
@@ -266,7 +285,11 @@ pub fn snapshot(agents: &[AgentInfo]) -> AgentsSnapshot {
 fn working_label(a: &AgentInfo) -> String {
     let kind = a.agent.as_deref().unwrap_or("agent");
     match a.title.as_deref() {
-        Some(t) if a.session_id.is_some() && a.pane_id.contains(':') && a.pane_id.matches(':').count() >= 2 => {
+        Some(t)
+            if a.session_id.is_some()
+                && a.pane_id.contains(':')
+                && a.pane_id.matches(':').count() >= 2 =>
+        {
             // filho sintético `w16:p5:abc` — a tarefa identifica melhor que "claude"
             let short = t.split_whitespace().take(3).collect::<Vec<_>>().join(" ");
             if short.is_empty() {
@@ -311,17 +334,21 @@ mod tests {
         ],"type":"agent_list"}}"#;
         let env: Envelope = serde_json::from_str(raw).unwrap();
         let pick = env.result.agents.iter().find(|a| a.focused).unwrap();
-        assert_eq!(AgentStatus::from_herdr(&pick.agent_status), AgentStatus::Working);
-        assert_eq!(pick.state_change_seq, 48);
-        assert_eq!(pick.pane_id, "w19:pB");
+        assert_eq!(
+            AgentStatus::from_herdr(&pick.agent_status),
+            AgentStatus::Working
+        );
+        assert_eq!(pick.state_change_seq, Some(48));
+        assert_eq!(pick.pane_id.as_deref(), Some("w19:pB"));
         let info = entry_to_info(pick);
         assert_eq!(info.agent.as_deref(), Some("claude"));
         assert_eq!(info.session_id.as_deref(), Some("sess-1"));
         assert_eq!(info.cwd.as_deref(), Some("/tmp/p"));
-        // ausente → default (0 seq, "" pane_id)
+        assert_eq!(info.state_change_seq, Some(48));
+        // ausente → None (não 0 / ""), pra o snapshot não inventar PaneSeq
         let grok = env.result.agents.iter().find(|a| !a.focused).unwrap();
-        assert_eq!(grok.state_change_seq, 0);
-        assert_eq!(grok.pane_id, "");
+        assert_eq!(grok.state_change_seq, None);
+        assert_eq!(grok.pane_id, None);
     }
 
     // --- aggregate_display: o pet "vê todos" os agentes ---
@@ -340,7 +367,7 @@ mod tests {
         AgentInfo {
             status,
             title: title.map(|s| s.to_string()),
-            state_change_seq: seq,
+            state_change_seq: Some(seq),
             pane_id: pane_id.to_string(),
             workspace_id: None,
             focused,
@@ -430,12 +457,27 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_descarta_pane_ou_seq_ausentes() {
+        let mut missing_seq = ai_pane(AgentStatus::Working, Some("x"), false, "w1:pA", 10);
+        missing_seq.state_change_seq = None;
+        let missing_pane = ai_pane(AgentStatus::Working, Some("y"), false, "", 20);
+        let ok = ai_pane(AgentStatus::Idle, Some("z"), true, "w1:pC", 30);
+        let snap = snapshot(&[missing_seq, missing_pane, ok]);
+        assert_eq!(snap.pane_seqs.len(), 1);
+        assert_eq!(snap.pane_seqs[0].pane_id, "w1:pC");
+        assert_eq!(snap.pane_seqs[0].seq, 30);
+    }
+
+    #[test]
     fn snapshot_sem_working_e_zero_e_nao_working() {
         let agents = [ai(AgentStatus::Idle, Some("dormindo"), true)];
         let snap = snapshot(&agents);
         assert_eq!(snap.n_working, 0);
         assert_eq!(snap.status, AgentStatus::Idle);
-        assert_eq!(format_working_badge(snap.n_working, &snap.working_labels), "⚙ 0");
+        assert_eq!(
+            format_working_badge(snap.n_working, &snap.working_labels),
+            "⚙ 0"
+        );
     }
 
     #[test]

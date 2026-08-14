@@ -208,19 +208,20 @@ struct GrokMeta {
 
 /// Filhos Grok, cada um atribuído a **no máximo um** pai `working`.
 ///
-/// Estratégia (em ordem) — `active_sessions.json` traz `session_id` + `pid`,
-/// mas o Herdr hoje não manda `agent_session` nos panes grok, então cwd sozinho
-/// era a chave errada (2 pais working no mesmo repo clonavam o mesmo filho):
+/// Estratégia (em ordem) — `active_sessions.json` traz `session_id` + `pid`;
+/// o Herdr hoje não manda `agent_session` nos panes grok:
 ///
 /// 1. `parent.session_id` == entrada ativa — se o Herdr passar a sessão.
-/// 2. `HERDR_PANE_ID` em `/proc/{pid}/environ` == `parent.pane_id` — o Herdr
-///    injeta isso no processo; o pid vem do `active_sessions.json`. É a chave
-///    pane↔sessão disponível hoje.
-/// 3. Sem chave: primeiro pai grok *working* com o mesmo cwd. Garante
-///    2 pais + 1 filho ⇒ conta 1 (testes / processo fora do Herdr).
+/// 2. `HERDR_PANE_ID` do pid (`/proc/{pid}/environ` no Linux; `ps eww -p`
+///    no macOS, o manifesto declara as duas plataformas). Se o pane
+///    **resolveu** e não casa com nenhum grok da lista → **descarta** a
+///    sessão (pid reciclado não escorrega pro vizinho via cwd).
+/// 3. Sem chave (pid morto / sem env): fallback por cwd **só** se existe
+///    exatamente 1 grok working naquele cwd e nenhum grok idle no mesmo
+///    cwd. Ambíguo (2 working, ou 1 working + idle) → sem filho, não
+///    inventa dono.
 ///
-/// Se (1) ou (2) amarram a sessão a um pai **idle**, os filhos **não** vazam
-/// para o vizinho working — `expand` só conta filho de pai `working`.
+/// Se (1) ou (2) amarram a um pai **idle**, os filhos não vazam.
 fn grok_children(agents: &[AgentInfo]) -> Vec<AgentInfo> {
     let grok: Vec<&AgentInfo> = agents
         .iter()
@@ -271,24 +272,48 @@ fn owner_for_grok_session<'a>(
     {
         return Some(*p);
     }
+    // Pane resolveu → casa ou descarta. Não cai no cwd (pid reciclado).
     if let Some(pane) = herdr_pane_id_for_pid(session.pid) {
-        if let Some(p) = grok.iter().find(|a| a.pane_id == pane) {
-            return Some(*p);
-        }
+        return grok.iter().find(|a| a.pane_id == pane).copied();
     }
-    let want = session.cwd.as_deref().map(norm_cwd);
-    working
-        .iter()
-        .copied()
-        .find(|a| a.cwd.as_deref().map(norm_cwd).as_deref() == want.as_deref())
+    cwd_unambiguous_working(session, grok, working)
 }
 
-/// `HERDR_PANE_ID` do processo Grok (Herdr injeta no PTY). `None` se o pid
-/// sumiu, não é do Herdr, ou a gente não consegue ler `/proc`.
+/// Fallback sem chave pane↔sessão: só 1 grok working naquele cwd e zero idle.
+fn cwd_unambiguous_working<'a>(
+    session: &GrokActive,
+    grok: &[&'a AgentInfo],
+    working: &[&'a AgentInfo],
+) -> Option<&'a AgentInfo> {
+    let want = session.cwd.as_deref().map(norm_cwd)?;
+    let same_cwd = grok
+        .iter()
+        .copied()
+        .filter(|a| a.cwd.as_deref().map(norm_cwd).as_deref() == Some(want.as_str()))
+        .count();
+    let working_here: Vec<&AgentInfo> = working
+        .iter()
+        .copied()
+        .filter(|a| a.cwd.as_deref().map(norm_cwd).as_deref() == Some(want.as_str()))
+        .collect();
+    if working_here.len() == 1 && same_cwd == 1 {
+        return Some(working_here[0]);
+    }
+    None
+}
+
+/// `HERDR_PANE_ID` do processo Grok (Herdr injeta no PTY).
+/// Linux: `/proc/{pid}/environ`. macOS (e fallback): `ps eww -p <pid>`.
+/// `None` = pid 0, processo sumiu, ou o env não tem a variável — aí o
+/// caller pode tentar o fallback restrito por cwd.
 fn herdr_pane_id_for_pid(pid: u32) -> Option<String> {
     if pid == 0 {
         return None;
     }
+    herdr_pane_id_from_proc(pid).or_else(|| herdr_pane_id_from_ps(pid))
+}
+
+fn herdr_pane_id_from_proc(pid: u32) -> Option<String> {
     let data = fs::read(format!("/proc/{pid}/environ")).ok()?;
     for pair in data.split(|b| *b == 0) {
         let Some(rest) = pair.strip_prefix(b"HERDR_PANE_ID=") else {
@@ -300,6 +325,27 @@ fn herdr_pane_id_for_pid(pid: u32) -> Option<String> {
         let s = s.trim();
         if !s.is_empty() {
             return Some(s.to_string());
+        }
+    }
+    None
+}
+
+fn herdr_pane_id_from_ps(pid: u32) -> Option<String> {
+    let out = std::process::Command::new("ps")
+        .args(["eww", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    for tok in text.split_whitespace() {
+        let Some(v) = tok.strip_prefix("HERDR_PANE_ID=") else {
+            continue;
+        };
+        let v = v.trim();
+        if !v.is_empty() {
+            return Some(v.to_string());
         }
     }
     None
@@ -402,7 +448,7 @@ fn child(parent: &AgentInfo, id: &str, title: Option<String>) -> AgentInfo {
     AgentInfo {
         status: AgentStatus::Working,
         title,
-        state_change_seq: 0,
+        state_change_seq: None, // filho sintético: sem seq do Herdr
         pane_id: format!("{}:{id}", parent.pane_id),
         workspace_id: parent.workspace_id.clone(),
         focused: false,
@@ -436,7 +482,7 @@ mod tests {
         AgentInfo {
             status: AgentStatus::Working,
             title: Some("main".into()),
-            state_change_seq: 7,
+            state_change_seq: Some(7),
             pane_id: "w16:p5".into(),
             workspace_id: Some("w16".into()),
             focused: true,
@@ -609,26 +655,30 @@ mod tests {
         let _ = fs::remove_dir_all(home);
     }
 
-    #[test]
-    fn expand_dois_pais_grok_mesmo_cwd_um_filho_conta_um() {
-        // C2: dois grok working no mesmo cwd não podem clonar o mesmo filho.
-        // Sem HERDR_PANE_ID (pid fake), cai no fallback "primeiro working do cwd".
-        let home = tmp_dir("g-fanout");
-        let cwd = "/tmp/proj-fanout";
+    fn write_one_kid(home: &Path, cwd: &str, sid: &str, kid: &str) {
         write(
             &home.join("active_sessions.json"),
-            r#"[{"session_id":"sess-a","pid":4294967294,"cwd":"/tmp/proj-fanout"}]"#,
+            &format!(r#"[{{"session_id":"{sid}","pid":4294967294,"cwd":"{cwd}"}}]"#),
         );
         write(
             &home
                 .join("sessions")
                 .join(encode_grok_cwd(cwd))
-                .join("sess-a")
+                .join(sid)
                 .join("subagents")
-                .join("kid")
+                .join(kid)
                 .join("meta.json"),
-            r#"{"subagent_id":"kid","description":"um filho","status":"running"}"#,
+            &format!(r#"{{"subagent_id":"{kid}","description":"um filho","status":"running"}}"#),
         );
+    }
+
+    #[test]
+    fn expand_dois_pais_grok_mesmo_cwd_um_filho_conta_um() {
+        // Sem bind pane↔sessão (pid fake), 2 working no mesmo cwd é ambíguo:
+        // fallback recusa. Filho conta 0×, nunca 2×.
+        let home = tmp_dir("g-fanout");
+        let cwd = "/tmp/proj-fanout";
+        write_one_kid(&home, cwd, "sess-a", "kid");
         let a = AgentInfo {
             pane_id: "w1:p1".into(),
             cwd: Some(cwd.into()),
@@ -646,9 +696,56 @@ mod tests {
             .iter()
             .filter(|x| x.session_id.as_deref() == Some("kid"))
             .collect();
-        assert_eq!(kids.len(), 1, "filho não pode contar 2×");
-        assert_eq!(out.len(), 3, "2 pais + 1 filho");
-        assert_eq!(kids[0].pane_id, "w1:p1:kid", "fica no primeiro pai working");
+        assert_eq!(kids.len(), 0, "ambíguo: não inventa dono (e não clona)");
+        assert_eq!(out.len(), 2);
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn expand_um_grok_working_cwd_unico_pega_filho() {
+        // Fallback por cwd só quando é o único grok daquele cwd.
+        let home = tmp_dir("g-one");
+        let cwd = "/tmp/proj-one";
+        write_one_kid(&home, cwd, "sess-a", "kid");
+        let a = AgentInfo {
+            pane_id: "w1:p1".into(),
+            cwd: Some(cwd.into()),
+            session_id: None,
+            ..parent_grok()
+        };
+        let out = with_grok_home(&home, || expand(&[a.clone()]));
+        let kids: Vec<_> = out
+            .iter()
+            .filter(|x| x.session_id.as_deref() == Some("kid"))
+            .collect();
+        assert_eq!(kids.len(), 1);
+        assert_eq!(kids[0].pane_id, "w1:p1:kid");
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn expand_working_mais_idle_mesmo_cwd_sem_bind_nao_chuta() {
+        let home = tmp_dir("g-mix");
+        let cwd = "/tmp/proj-mix";
+        write_one_kid(&home, cwd, "sess-a", "kid");
+        let idle = AgentInfo {
+            status: AgentStatus::Idle,
+            pane_id: "w1:pIdle".into(),
+            cwd: Some(cwd.into()),
+            session_id: None,
+            ..parent_grok()
+        };
+        let working = AgentInfo {
+            pane_id: "w1:pWork".into(),
+            cwd: Some(cwd.into()),
+            session_id: None,
+            ..parent_grok()
+        };
+        let out = with_grok_home(&home, || expand(&[idle.clone(), working.clone()]));
+        assert!(
+            out.iter().all(|a| a.session_id.as_deref() != Some("kid")),
+            "idle no cwd bloqueia o fallback"
+        );
         let _ = fs::remove_dir_all(home);
     }
 

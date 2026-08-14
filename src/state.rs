@@ -65,7 +65,8 @@ impl State {
     /// um pane = baseline (sem creditar); nas seguintes, XP pelo delta. Vários agentes
     /// avançando sofrem o decaimento harmônico (anti-proliferação). Devolve o XP ganho.
     pub fn apply_catchup(&mut self, agents: &[PaneSeq]) -> u64 {
-        // Dedupe por pane (maior seq) — pane duplicado (ex.: pane_id ausente) não dobra a conta.
+        // Dedupe por pane (maior seq neste tick). Snapshot já descarta pane/seq
+        // omitidos; se o mesmo pane vier 2×, o maior valor é o observado.
         let mut latest: HashMap<&str, u64> = HashMap::new();
         for ps in agents {
             latest
@@ -90,7 +91,6 @@ impl State {
             linear += gained;
         }
         for (pane_id, observed) in &latest {
-            // Nunca rebobinar: seq omitido (default 0) ou menor que o last não apaga a baseline.
             self.remember_seq(pane_id, *observed);
         }
         // Fator de largura harmonic_milli(N)/N: 1 agente = MILLI (cheio); mais = menos cada.
@@ -106,9 +106,9 @@ impl State {
 
     /// Avança a baseline de cada agente **sem creditar XP** — usado no poll enquanto o
     /// pane está aberto, pra o próximo catch-up contar só o período fechado (sem dupla
-    /// contagem). Dedupe pelo maior seq do slice; nunca regride um last já visto
-    /// (pane duplicado / seq default 0 não rebobina — senão o catch-up seguinte
-    /// paga replay).
+    /// contagem). Dedupe pelo maior seq do slice. Se o observado for menor que o last
+    /// (reset genuíno do Herdr), a baseline desce; o 0 espúrio da API omitida não
+    /// chega — `agent::snapshot` descarta PaneSeq incompleto.
     pub fn record_seen_seq(&mut self, agents: &[PaneSeq]) {
         let mut latest: HashMap<&str, u64> = HashMap::new();
         for ps in agents {
@@ -122,12 +122,14 @@ impl State {
         }
     }
 
-    /// Baseline monotônica por pane: primeira vista grava; depois só sobe.
+    /// Grava o seq observado. `observed < last` é reset genuíno (Herdr reiniciou
+    /// ou o pane_id foi reusado): rebobina sem creditar neste tick — o ganho já
+    /// saiu 0 via `saturating_sub`. Deltas seguintes partem do novo zero.
+    ///
+    /// Replay 200→0→200 de campo omitido continua morto: o 0 espúrio não passa
+    /// do snapshot (`Option`, descarta ausente). Um 0 que chega aqui é real.
     fn remember_seq(&mut self, pane_id: &str, observed: u64) {
-        self.last_seq_by_pane
-            .entry(pane_id.to_string())
-            .and_modify(|e| *e = (*e).max(observed))
-            .or_insert(observed);
+        self.last_seq_by_pane.insert(pane_id.to_string(), observed);
     }
 }
 

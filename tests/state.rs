@@ -158,9 +158,9 @@ fn record_seen_seq_avanca_baseline_sem_creditar() {
 }
 
 #[test]
-fn record_seen_seq_duplicado_com_seq_zero_nao_rebobina() {
-    // Mesmo pane 2× no poll (API omite o campo → seq 0 por último) não pode
-    // baixar a baseline; o catch-up seguinte com o seq real não paga replay.
+fn record_seen_seq_mesmo_tick_fica_com_o_maior() {
+    // Dois valores no mesmo slice: o maior é o observado deste tick.
+    // O 0 *espúrio* (campo omitido) não chega aqui — snapshot descarta.
     let mut s = State::new(1);
     s.record_seen_seq(&[PaneSeq {
         pane_id: "w1:p1".into(),
@@ -181,13 +181,16 @@ fn record_seen_seq_duplicado_com_seq_zero_nao_rebobina() {
         pane_id: "w1:p1".into(),
         seq: 150,
     }]);
-    assert_eq!(gained, 0, "seq já visto não gera XP");
+    assert_eq!(gained, 0, "seq já visto neste teto não gera XP");
     assert_eq!(s.xp, 0);
 }
 
 #[test]
-fn apply_catchup_200_0_200_nao_paga_replay() {
-    // Campo omitido (seq 0) no meio não rebobina; reabrir no 200 não credita de novo.
+fn apply_catchup_reset_genuino_rebobina_sem_creditar_nesse_tick() {
+    // 0 real (Herdr reiniciou / pane_id reusado) rebobina a baseline.
+    // Este tick: 0 XP. O próximo delta conta a partir do novo zero.
+    // Replay de campo omitido (200→ausente→200) não acontece: o snapshot
+    // não emite PaneSeq sem seq, então o 0 espúrio nunca chega aqui.
     let mut s = State::new(1);
     assert_eq!(
         s.apply_catchup(&[PaneSeq {
@@ -201,13 +204,14 @@ fn apply_catchup_200_0_200_nao_paga_replay() {
             pane_id: "p".into(),
             seq: 0
         }]),
-        0
+        0,
+        "reset não credita neste tick"
     );
-    assert_eq!(s.last_seq_by_pane.get("p"), Some(&200));
+    assert_eq!(s.last_seq_by_pane.get("p"), Some(&0));
     let gained = s.apply_catchup(&[PaneSeq {
         pane_id: "p".into(),
-        seq: 200,
+        seq: 40,
     }]);
-    assert_eq!(gained, 0, "replay 200→0→200 não pode creditar");
-    assert_eq!(s.xp, 0);
+    assert_eq!(gained, herdr_pet::progression::xp_for_catchup(40));
+    assert_eq!(s.last_seq_by_pane.get("p"), Some(&40));
 }
