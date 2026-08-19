@@ -60,6 +60,12 @@ enum Cmd {
     Gallery,
     /// Estado do companion.
     Status,
+    /// Histórico dos últimos N dias (default 7): XP, tempo e sessões por dia, e a sequência.
+    Log {
+        /// Quantos dias pra trás mostrar (contando hoje).
+        #[arg(long, default_value_t = 7)]
+        days: u32,
+    },
     /// Pós-install: grava atalho no config do Herdr + shim no PATH (idempotente).
     /// Rodado automaticamente no `[[build]]` e no `[[startup]]` do plugin.
     Setup {
@@ -149,7 +155,26 @@ fn main() {
                 },
             };
             // Com `--mood` o state (se houver) é só leitura: exibe o pet, nunca grava.
-            let persist = persist && forced.is_none();
+            let mut persist = persist && forced.is_none();
+
+            // Lock de verdade do state (fecha a limitação do toggle): com
+            // persistência ativa, este watch tem que ser o ÚNICO dono do
+            // `state.json` — dois donos carregam cópias e salvam por cima um
+            // do outro. Se outro watch vivo já tem o lock (`plugin pane open`
+            // chamado direto, corrida de toggle), o pane NÃO morre: vira
+            // ESPELHO — mesmo caminho do dev `--id`/`--mood` (desenha tudo,
+            // nunca grava), marcado no rodapé. O XP real fica com o dono.
+            let mut mirror = false;
+            let mut state_lock: Option<herdr_pet::state::StateLock> = None;
+            if persist {
+                match herdr_pet::state::acquire_state_lock() {
+                    herdr_pet::state::LockOutcome::Acquired(l) => state_lock = Some(l),
+                    herdr_pet::state::LockOutcome::Held { .. } => {
+                        mirror = true;
+                        persist = false;
+                    }
+                }
+            }
             // "O que está no disco" na abertura — capturado ANTES do catch-up: o XP e
             // as baselines que o catch-up creditar nascem "sujos" (não salvos) e o
             // primeiro gate periódico/final os grava. Inicializar depois do catch-up
@@ -225,6 +250,11 @@ fn main() {
             // save (clone só ao salvar) e comparamos só quando o gate de frame passa
             // (~a cada 30s).
             let mut last_save_frame = 0u32;
+            // Ritmo do heartbeat do lock: contador PRÓPRIO, não o do save — o
+            // `last_save_frame` só anda quando há algo a salvar, e amarrar o
+            // heartbeat nele bateria o mtime do lock a cada frame numa sessão
+            // parada (~0,8s de I/O à toa).
+            let mut last_beat_frame = 0u32;
             // true = o último save tentado falhou (marcador `⚠ save` no rodapé).
             let mut save_failing = false;
             const SAVE_EVERY_FRAMES: u32 = 36; // ~30s (ciclo ~0,8s)
@@ -254,6 +284,9 @@ fn main() {
                 let mult = if forced.is_some() { 0 } else { harmonic_milli(n_working) };
                 if mult > 0 {
                     state.xp += accrual.add_working(dt, mult);
+                    // Mesmo gate do XP: este dt foi trabalho acompanhado —
+                    // vira `secs_working` na linha do diário no fecho.
+                    session.note_working_span(dt);
                 }
 
                 // Tarefa exibida: com vários working, rotaciona entre elas (~4s cada);
@@ -269,12 +302,19 @@ fn main() {
                 let lv = level_view(state.xp);
                 let period = herdr_pet::render::animation_period(status, &pet);
                 let badge = herdr_pet::agent::format_working_badge(n_working, &working_labels);
-                // Sinal de save falho, NÃO-SPAM: `· ⚠ save` fica no rodapé enquanto
-                // o último save tiver falhado e some no primeiro que passa. Sinal
-                // por transição (entra no sig como string): liga/desliga ⇒ um
-                // redraw; falha persistente não redesenha nada por frame. Nada de
-                // eprintln no loop — sujaria o LCD.
-                let footer = if save_failing { format!("{badge} · ⚠ save") } else { badge };
+                // Sinais do rodapé, NÃO-SPAM: `· ⚠ save` acende enquanto o último
+                // save tiver falhado e some no primeiro que passa; `· ⚠ espelho`
+                // fica a sessão inteira do espelho. Sinal por transição (entram no
+                // sig como string): liga/desliga ⇒ um redraw; condição persistente
+                // não redesenha nada por frame. Nada de eprintln no loop — sujaria
+                // o LCD.
+                let mut footer = badge;
+                if mirror {
+                    footer = format!("{footer} · ⚠ espelho");
+                }
+                if save_failing {
+                    footer = format!("{footer} · ⚠ save");
+                }
                 let sig = (
                     status,
                     frame % period,
@@ -309,6 +349,17 @@ fn main() {
                     }
                     let _ = out.flush();
                     last_sig = Some(sig);
+                }
+
+                // Heartbeat do lock no mesmo ritmo do save (~30s): prova de vida
+                // pra o próximo watch decidir se um lock parado é sobra de crash
+                // ou dono vivo. Roda mesmo sem nada a salvar — é sobre o lock,
+                // não sobre o state. Espelho não tem lock (e não heartbeata).
+                if frame.wrapping_sub(last_beat_frame) >= SAVE_EVERY_FRAMES {
+                    if let Some(l) = state_lock.as_ref() {
+                        l.heartbeat();
+                        last_beat_frame = frame;
+                    }
                 }
 
                 // Save periódico (sem ddos de disco): ~a cada 30s, se o XP ou as
@@ -357,8 +408,29 @@ fn main() {
             }
 
             let summary = session.summarize(state.xp, state.level());
-            let line = summary.format_line();
-            notify_session(&line);
+
+            // Diário: a sessão vira história (linha no `sessions.jsonl`).
+            // Acessório de verdade — se a gravação falhar, o pet não repara: o
+            // state JÁ foi salvo acima, nada de panic, e o aviso segue o padrão
+            // do `⚠ save` (uma linha discreta no farewell, LCD limpo o resto do
+            // tempo). Espelho e dev (`--id`, `--mood`) não gravam: o trabalho
+            // daquele período já vai no diário do dono do lock — gravar de novo
+            // seria dupla contagem.
+            let mut journal_failing = false;
+            if persist {
+                let entry = summary.to_entry(herdr_pet::journal::today_local());
+                journal_failing = herdr_pet::journal::append(&entry).is_err();
+            }
+
+            let mut line = summary.format_line();
+            if mirror {
+                // O resumo do espelho mostra um XP que este pane NÃO gravou —
+                // o sufixo impede a leitura de "ganhei e salvou".
+                line.push_str(" · espelho");
+            }
+            if !mirror {
+                notify_session(&line);
+            }
 
             // Último quadro ainda na tela alternativa — o pane precisa estar vivo
             // pra isso aparecer. O toggle manda Ctrl+C e só fecha depois.
@@ -381,6 +453,14 @@ fn main() {
                 let _ = writeln!(
                     out,
                     "{DIM}⚠ save falhou — progresso não gravado no disco{RESET}"
+                );
+            }
+            if journal_failing {
+                // Mesma voz do ⚠ save: histórico é acessório, mas a sequência
+                // pode perder um dia em silêncio — o usuário merece saber.
+                let _ = writeln!(
+                    out,
+                    "{DIM}⚠ diário falhou — sessão não foi pro histórico{RESET}"
                 );
             }
             let _ = out.flush();
@@ -474,6 +554,7 @@ fn main() {
                 herdr_pet::render::render_casinha(&primordial, 0, herdr_pet::AgentStatus::Idle, None)
             );
         }
+        Cmd::Log { days } => print_log(days),
         Cmd::Status => match herdr_pet::state::load_outcome() {
             herdr_pet::state::LoadOutcome::Loaded(s) => {
                 print_pet(&hatch(s.github_id, s.active_index));
@@ -549,6 +630,10 @@ fn print_progress(state: &herdr_pet::state::State) {
         outln!("│ nível   : {BOLD}Nv 99 ★ máximo{RESET}");
     }
     outln!("│ total   : {} XP", state.xp);
+    // Sequência do diário, só quando há diário — sem inventar linha vazia.
+    if let Some(st) = load_streak() {
+        outln!("│ {}", streak_phrase(&st));
+    }
     outln!(
         "│ agora   : {}",
         herdr_pet::agent::format_working_badge(snap.n_working, &snap.working_labels)
@@ -557,6 +642,100 @@ fn print_progress(state: &herdr_pet::state::State) {
         outln!("{DIM}│           · {title}{RESET}");
     }
     outln!("└──────────────────────────────────────────");
+}
+
+/// `herdr-pet log [--days N]`: os últimos N dias com trabalho (XP, tempo,
+/// sessões) e a sequência. I/O só na borda — janela, linha do dia e frase da
+/// sequência são puras e testadas no fim do arquivo.
+fn print_log(window: u32) {
+    use herdr_pet::streaks;
+
+    let today = herdr_pet::journal::today_local();
+    let days = streaks::by_day(&herdr_pet::journal::load());
+    let st = streaks::streak(&days, &today);
+    // Janela em dias julianos (o contrato do streaks): diferença pura, sem
+    // aritmética de calendário da nossa parte.
+    let today_jd = streaks::parse_day(&today).map(|(y, m, d)| streaks::days_from_civil(y, m, d));
+
+    if window == 1 {
+        outln!("┌─ diário — último dia ───────────────");
+    } else {
+        outln!("┌─ diário — últimos {window} dias ──────────");
+    }
+    if days.is_empty() {
+        outln!("│ sem histórico ainda — feche um pane do pet pra começar");
+    } else {
+        let mut shown = 0usize;
+        for d in days.iter().rev() {
+            // `by_day` vem cronológico; a linha ENTRA quando qualquer lado não
+            // parseia (dia mal gravado, fuso exótico) — falha aberta, não
+            // oculta: esconder trabalho que existe é pior que mostrar.
+            let inside = match (today_jd, streaks::parse_day(&d.day)) {
+                (Some(t), Some((y, m, dd))) => {
+                    in_window(t - streaks::days_from_civil(y, m, dd), window)
+                }
+                _ => true,
+            };
+            if inside {
+                outln!("│ {}", format_day_row(d));
+                shown += 1;
+            }
+        }
+        if shown == 0 {
+            outln!("│ (sem sessões no período)");
+        }
+        outln!("│ {}", streak_phrase(&st));
+    }
+    outln!("└──────────────────────────────────────────");
+}
+
+/// Diferença em dias (hoje − dia) dentro da janela de `window` dias, contando
+/// hoje? Sem piso inferior de propósito: data "no futuro" (fuso na meia-noite,
+/// relógio adiantado) entra — a linha existe, ocultá-la mente por omissão.
+fn in_window(diff: i64, window: u32) -> bool {
+    diff < i64::from(window)
+}
+
+/// `2026-08-19 · +1.240 XP · 47 min · 2 sessões`. Tempo só quando houve
+/// trabalho acompanhado: dia de catch-up puro mostra XP e sessões ("0 s" é
+/// ruído, não informação).
+fn format_day_row(d: &herdr_pet::streaks::Day) -> String {
+    use herdr_pet::session::{format_duration, format_int};
+    let mut parts = vec![d.day.clone(), format!("+{} XP", format_int(d.xp))];
+    if d.secs_working > 0 {
+        parts.push(format_duration(std::time::Duration::from_secs(
+            d.secs_working,
+        )));
+    }
+    parts.push(if d.sessions == 1 {
+        "1 sessão".to_string()
+    } else {
+        format!("{} sessões", d.sessions)
+    });
+    parts.join(" · ")
+}
+
+/// `Sequência: 5 dias (recorde 12)` — singular no 1, recorde como número seco.
+/// A linha que o `status` e o `log` compartilham.
+fn streak_phrase(st: &herdr_pet::streaks::Streak) -> String {
+    let atual = if st.current == 1 {
+        "1 dia".to_string()
+    } else {
+        format!("{} dias", st.current)
+    };
+    format!("Sequência: {atual} (recorde {})", st.best)
+}
+
+/// Sequência do diário em disco (`None` se ainda não há diário — quem chama
+/// decide o que fazer sem ele). Os subs (hoje local, agregação por dia) são do
+/// contrato das fatias B e C.
+fn load_streak() -> Option<herdr_pet::streaks::Streak> {
+    let days = herdr_pet::streaks::by_day(&herdr_pet::journal::load());
+    if days.is_empty() {
+        return None;
+    }
+    let today = herdr_pet::journal::today_local();
+    Some(herdr_pet::streaks::streak(&days, &today))
 }
 
 /// Caminho do CLI `herdr`: HERDR_BIN_PATH → `herdr` no PATH → `~/.local/bin/herdr`.
@@ -737,10 +916,9 @@ fn notify_session(line: &str) {
 ///   ANTES de fechar: se não há pra onde reabrir, o pet fica onde está —
 ///   nunca fica sem pet nenhum por falha de API.
 ///
-/// Limitação conhecida (deixada aberta por decisão): `herdr plugin pane open`
-/// chamado DIRETO (fora deste toggle) ainda pode criar um segundo watch. O
-/// lock tmp-com-pid no save reduz o dano a lost-update, sem corrupção; um
-/// lock de arquivo de verdade é follow-up.
+/// O segundo watch que escapa deste toggle (`herdr plugin pane open` chamado
+/// DIRETO) não corrói mais nada: o lock do state faz o segundo watch entrar em
+/// modo espelho — desenha, não salva (ver a tomada do lock no braço do `watch`).
 /// Leve — o `watch` só roda enquanto aberto.
 fn open_pet_small() -> Result<(), String> {
     let bin = herdr_bin();
@@ -861,4 +1039,62 @@ fn open_pet_split(bin: &str, target: &str) -> Result<(), String> {
 
     outln!("✓ pet aberto ({pet}) — dockado embaixo. Ctrl+C fecha · redimensionar: prefix+r");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn day(day: &str, xp: u64, secs: u64, sessions: usize) -> herdr_pet::streaks::Day {
+        herdr_pet::streaks::Day {
+            day: day.to_string(),
+            xp,
+            secs_working: secs,
+            sessions,
+        }
+    }
+
+    #[test]
+    fn janela_pega_os_ultimos_n_dias_contando_hoje() {
+        assert!(in_window(0, 7), "hoje sempre entra");
+        assert!(in_window(1, 7), "ontem entra");
+        assert!(in_window(6, 7), "sexto dia atrás ainda é a janela");
+        assert!(!in_window(7, 7), "sétimo dia atrás ficou fora");
+        assert!(in_window(0, 1), "janela de 1 é só hoje");
+        assert!(!in_window(1, 1));
+    }
+
+    #[test]
+    fn janela_nao_esconde_data_no_futuro() {
+        // Fuso/relógio podem gravar "amanhã": mostrar é honesto, ocultar mente.
+        assert!(in_window(-1, 7));
+    }
+
+    #[test]
+    fn linha_do_dia_formata_xp_tempo_e_sessoes() {
+        let d = day("2026-08-19", 1_240, 47 * 60, 2);
+        assert_eq!(
+            format_day_row(&d),
+            "2026-08-19 · +1.240 XP · 47 min · 2 sessões"
+        );
+    }
+
+    #[test]
+    fn linha_do_dia_omite_tempo_zero_e_singulariza_sessao() {
+        // Catch-up puro (0 s acompanhados) não mostra "0 s".
+        let d = day("2026-08-01", 300, 0, 1);
+        assert_eq!(format_day_row(&d), "2026-08-01 · +300 XP · 1 sessão");
+    }
+
+    #[test]
+    fn frase_da_sequencia_singular_e_recorde_seco() {
+        let st = |current: u32, best: u32| herdr_pet::streaks::Streak {
+            current,
+            best,
+            last_day: Some("2026-08-19".to_string()),
+        };
+        assert_eq!(streak_phrase(&st(5, 12)), "Sequência: 5 dias (recorde 12)");
+        assert_eq!(streak_phrase(&st(1, 1)), "Sequência: 1 dia (recorde 1)");
+        assert_eq!(streak_phrase(&st(0, 12)), "Sequência: 0 dias (recorde 12)");
+    }
 }
