@@ -48,7 +48,8 @@ pub fn append_to(p: &Path, e: &Entry) -> std::io::Result<()> {
             fs::create_dir_all(parent)?;
         }
     }
-    let mut line = serde_json::to_vec(e).expect("Entry serializa");
+    let mut line = serde_json::to_vec(e)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     line.push(b'\n');
     let mut f = OpenOptions::new().create(true).append(true).open(p)?;
     f.write_all(&line)?;
