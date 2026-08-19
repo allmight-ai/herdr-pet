@@ -374,7 +374,11 @@ fn sweep_orphan_tmps(dir: &Path, own_tmp: &Path) {
             .ok()
             .and_then(|m| m.modified().ok())
             .and_then(|t| SystemTime::now().duration_since(t).ok());
-        if tmp_is_garbage(p == own_tmp, age, owner_alive(tmp_owner_pid(name))) {
+        if tmp_is_garbage(
+            p == own_tmp,
+            age,
+            tmp_owner_pid(name).and_then(crate::proc::pid_alive),
+        ) {
             let _ = fs::remove_file(&p);
         }
     }
@@ -382,7 +386,7 @@ fn sweep_orphan_tmps(dir: &Path, own_tmp: &Path) {
 
 /// A regra da varredura, isolada pra ser testável (o `read_dir` em si não é).
 /// O tmp deste processo nunca é lixo; um tmp que passou da carência é (cobre
-/// formato antigo, plataforma sem `/proc` e pid reciclado por outro programa);
+/// formato antigo, dono impossível de checar e pid reciclado por outro programa);
 /// e um tmp de dono comprovadamente morto é. Dono vivo + tmp recente = gravação
 /// em voo de OUTRO processo — o pid no nome existe justamente pra dois `watch`
 /// salvarem em paralelo, e apagar o tmp alheio desfazia essa garantia.
@@ -402,15 +406,6 @@ fn tmp_is_garbage(own: bool, age: Option<Duration>, owner_alive: Option<bool>) -
 /// formato antigo, que não carregava dono.
 fn tmp_owner_pid(name: &str) -> Option<u32> {
     name.rsplit_once("tmp-herdr-pet-")?.1.parse().ok()
-}
-
-/// O dono do tmp ainda roda? `None` quando não dá pra saber — sem pid no nome
-/// ou sem `/proc` na plataforma — e aí só a idade decide.
-fn owner_alive(pid: Option<u32>) -> Option<bool> {
-    let pid = pid?;
-    Path::new("/proc/self")
-        .exists()
-        .then(|| Path::new("/proc").join(pid.to_string()).exists())
 }
 
 /// Nome do tmp do `write_atomic` pra este processo.
@@ -559,7 +554,7 @@ mod tests {
 
     #[test]
     fn tmp_vencido_e_varrido_mesmo_sem_veredito_do_dono() {
-        // Formato antigo, plataforma sem /proc ou pid reciclado: a carência é a
+        // Formato antigo, dono impossível de checar ou pid reciclado: a carência é a
         // rede de segurança pra o lixo não ficar eterno.
         assert!(tmp_is_garbage(false, Some(TMP_ORPHAN_GRACE), None));
         assert!(!tmp_is_garbage(false, Some(Duration::from_secs(1)), None));
@@ -585,6 +580,5 @@ mod tests {
             None,
             "lixo no sufixo"
         );
-        assert_eq!(owner_alive(None), None);
     }
 }

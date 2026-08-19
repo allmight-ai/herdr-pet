@@ -97,7 +97,7 @@ fn owner_for_grok_session<'a>(
     grok: &[&'a AgentInfo],
     working: &[&'a AgentInfo],
 ) -> Option<&'a AgentInfo> {
-    if session.pid != 0 && !pid_is_alive(session.pid) {
+    if session.pid != 0 && !crate::proc::pid_alive(session.pid).unwrap_or(false) {
         return None;
     }
     if let Some(p) = grok
@@ -111,21 +111,6 @@ fn owner_for_grok_session<'a>(
         return grok.iter().find(|a| a.pane_id == pane).copied();
     }
     cwd_unambiguous_working(session, grok, working)
-}
-
-/// Linux: `/proc/<pid>` existe. macOS / sem proc: `kill -0` (sem sinal).
-fn pid_is_alive(pid: u32) -> bool {
-    if pid == 0 {
-        return false;
-    }
-    if Path::new("/proc/self").exists() {
-        return Path::new(&format!("/proc/{pid}")).exists();
-    }
-    std::process::Command::new("kill")
-        .args(["-0", &pid.to_string()])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
 }
 
 /// Fallback sem chave pane↔sessão: só 1 grok working naquele cwd e zero idle.

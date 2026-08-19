@@ -11,6 +11,7 @@ pub mod crypto;
 pub mod forge;
 pub mod name;
 pub mod pet;
+pub mod proc;
 pub mod progression;
 pub mod render;
 pub mod session;
