@@ -306,7 +306,10 @@ fn apply_catchup_evicta_pane_ausente_e_subagente_morto() {
     }]);
     assert_eq!(s.last_seq_by_pane.len(), 1, "só o pane presente sobrevive");
     assert!(s.last_seq_by_pane.contains_key("w1:pA"));
-    assert!(!s.last_seq_by_pane.contains_key("w2:pMORREU"), "pane morto evictado");
+    assert!(
+        !s.last_seq_by_pane.contains_key("w2:pMORREU"),
+        "pane morto evictado"
+    );
     assert!(
         !s.last_seq_by_pane.contains_key("w16:p5:abc-sub"),
         "subagente sintético morto evictado"
@@ -328,7 +331,7 @@ fn pane_vivo_ausente_numa_abertura_nao_credita_historico_na_volta() {
         pane_id: "w9:pOUTRO".into(),
         seq: 10,
     }]);
-    assert!(s.last_seq_by_pane.get("w1:pA").is_none(), "foi evictado");
+    assert!(!s.last_seq_by_pane.contains_key("w1:pA"), "foi evictado");
     // Volta com 200 de seq — SEM crédito dos 100 "perdidos":
     let gained = s.apply_catchup(&[PaneSeq {
         pane_id: "w1:pA".into(),
@@ -506,8 +509,8 @@ fn state_sem_permissao_e_unreadable_e_o_conteudo_sobrevive() {
     // Modo 000: não dá nem pra LER os bytes — não há como preservar, então o
     // sinal é "não recrie por cima". Nada é gravado; o conteúdo intacto volta
     // quando o acesso é corrigido.
-    use std::os::unix::fs::PermissionsExt;
     use herdr_pet::state::{load_from_outcome, LoadOutcome};
+    use std::os::unix::fs::PermissionsExt;
     let path = tmp("modo000");
     std::fs::write(
         &path,

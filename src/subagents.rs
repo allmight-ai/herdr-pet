@@ -313,7 +313,7 @@ fn read_claude_title(meta_path: &Path) -> Option<String> {
     meta.description
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .or_else(|| meta.agent_type)
+        .or(meta.agent_type)
 }
 
 fn file_older_than(path: &Path, secs: u64) -> bool {
@@ -424,11 +424,11 @@ pub fn claude_still_running(jsonl: &Path) -> bool {
                 .collect()
         })
         .unwrap_or_default();
-    if types.iter().any(|t| *t == "tool_use") {
+    if types.contains(&"tool_use") {
         return true;
     }
     // Só texto (sem tool_use) = resposta final, mesmo sem stop_reason.
-    if types.iter().any(|t| *t == "text") {
+    if types.contains(&"text") {
         return false;
     }
     true
@@ -986,7 +986,7 @@ mod tests {
             status: AgentStatus::Done,
             ..parent_claude()
         };
-        assert_eq!(expand(&[idle.clone()]), vec![idle]);
+        assert_eq!(expand(std::slice::from_ref(&idle)), vec![idle]);
     }
 
     fn set_age(path: &Path, secs: u64) {
@@ -1180,7 +1180,7 @@ mod tests {
         let home = tmp_dir("g-empty");
         write(&home.join("active_sessions.json"), "[]");
         let grok = parent_grok();
-        let out = with_grok_home(&home, || expand(&[grok.clone()]));
+        let out = with_grok_home(&home, || expand(std::slice::from_ref(&grok)));
         assert_eq!(out, vec![grok]);
         let _ = fs::remove_dir_all(home);
     }
@@ -1243,7 +1243,7 @@ mod tests {
             session_id: None,
             ..parent_grok()
         };
-        let out = with_grok_home(&home, || expand(&[a.clone()]));
+        let out = with_grok_home(&home, || expand(std::slice::from_ref(&a)));
         let kids: Vec<_> = out
             .iter()
             .filter(|x| x.session_id.as_deref() == Some("kid"))
@@ -1292,7 +1292,7 @@ mod tests {
             session_id: None,
             ..parent_grok()
         };
-        let out = with_grok_home(&home, || expand(&[a.clone()]));
+        let out = with_grok_home(&home, || expand(std::slice::from_ref(&a)));
         assert!(
             out.iter().all(|x| x.session_id.as_deref() != Some("ghost")),
             "pid morto não cai no fallback por cwd"
@@ -1349,7 +1349,7 @@ mod tests {
         write_claude_session(&root, cwd, "old-sid", Some(("ghost", true)), 3600);
         write_claude_session(&root, cwd, "new-sid", Some(("kid", true)), 0);
         let p = parent_glm(cwd, "w19:pS");
-        let out = with_claude_cfg(&root, || expand(&[p.clone()]));
+        let out = with_claude_cfg(&root, || expand(std::slice::from_ref(&p)));
         let kids: Vec<_> = out
             .iter()
             .filter(|a| a.pane_id.starts_with("w19:pS:"))
@@ -1431,7 +1431,7 @@ mod tests {
             session_id: Some("sess-bound".into()),
             ..parent_claude()
         };
-        let out = with_claude_cfg(&root, || expand(&[p.clone()]));
+        let out = with_claude_cfg(&root, || expand(std::slice::from_ref(&p)));
         let kids: Vec<_> = out
             .iter()
             .filter(|a| a.pane_id.contains(':') && a.pane_id != p.pane_id)
@@ -1451,7 +1451,7 @@ mod tests {
             agent: Some("glm".into()),
             ..parent_glm(cwd, "w19:pG")
         };
-        let out = with_claude_cfg(&root, || expand(&[p.clone()]));
+        let out = with_claude_cfg(&root, || expand(std::slice::from_ref(&p)));
         assert_eq!(
             out.iter()
                 .filter(|a| a.session_id.as_deref() == Some("kid"))
@@ -1469,7 +1469,7 @@ mod tests {
         write_claude_session(&root, cwd, "old-sid", Some(("ghost", true)), 3600);
         write_claude_session(&root, cwd, "new-sid", None, 0);
         let p = parent_glm(cwd, "w19:pS");
-        let out = with_claude_cfg(&root, || expand(&[p.clone()]));
+        let out = with_claude_cfg(&root, || expand(std::slice::from_ref(&p)));
         assert_eq!(out, vec![p]);
         let _ = fs::remove_dir_all(root);
     }
@@ -1487,7 +1487,7 @@ mod tests {
             pane_id: "w1:pZ".into(),
             ..parent_claude()
         };
-        let out = with_claude_cfg(&root, || expand(&[p.clone()]));
+        let out = with_claude_cfg(&root, || expand(std::slice::from_ref(&p)));
         assert_eq!(
             out.iter()
                 .filter(|a| a.session_id.as_deref() == Some("kid"))
@@ -1510,7 +1510,7 @@ mod tests {
             pane_id: "w1:pU".into(),
             ..parent_claude()
         };
-        let out = with_claude_cfg(&root, || expand(&[p.clone()]));
+        let out = with_claude_cfg(&root, || expand(std::slice::from_ref(&p)));
         assert_eq!(
             out.iter()
                 .filter(|a| a.session_id.as_deref() == Some("kid"))
@@ -1527,7 +1527,7 @@ mod tests {
         let cwd = "/tmp/glm-stale";
         write_claude_session(&root, cwd, "old-sid", Some(("ghost", true)), 3600);
         let p = parent_glm(cwd, "w19:pS");
-        let out = with_claude_cfg(&root, || expand(&[p.clone()]));
+        let out = with_claude_cfg(&root, || expand(std::slice::from_ref(&p)));
         assert!(
             out.iter().all(|a| a.session_id.as_deref() != Some("ghost")),
             "jsonl fora da janela de {CLAUDE_FALLBACK_FRESH_SECS}s não é adotado"
@@ -1546,7 +1546,7 @@ mod tests {
         write_claude_session(&root_a, cwd, "sid-a", Some(("kid-a", true)), 0);
         write_claude_session(&root_b, cwd, "sid-b", Some(("kid-b", true)), 0);
         let p = parent_glm(cwd, "w19:pS");
-        let out = with_claude_two_roots(&root_a, &root_b, || expand(&[p.clone()]));
+        let out = with_claude_two_roots(&root_a, &root_b, || expand(std::slice::from_ref(&p)));
         assert!(
             out.iter().all(|a| {
                 a.session_id.as_deref() != Some("kid-a") && a.session_id.as_deref() != Some("kid-b")

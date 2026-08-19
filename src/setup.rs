@@ -25,8 +25,9 @@ pub struct SetupReport {
     pub key: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum KeybindStatus {
+    #[default]
     AlreadyOk,
     Installed,
     ConflictSkipped,
@@ -34,35 +35,21 @@ pub enum KeybindStatus {
     Error,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ShimStatus {
+    #[default]
     AlreadyOk,
     Installed,
     Updated,
     Error,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ReloadStatus {
+    #[default]
     NotNeeded,
     Reloaded,
     Skipped,
-}
-
-impl Default for KeybindStatus {
-    fn default() -> Self {
-        Self::AlreadyOk
-    }
-}
-impl Default for ShimStatus {
-    fn default() -> Self {
-        Self::AlreadyOk
-    }
-}
-impl Default for ReloadStatus {
-    fn default() -> Self {
-        Self::NotNeeded
-    }
 }
 
 /// Garante keybind no config do Herdr + shim em `~/.local/bin/herdr-pet`.
@@ -77,10 +64,7 @@ pub fn ensure_setup() -> Result<SetupReport, String> {
     report.shim = shim_status;
 
     let need_reload = key_changed
-        || matches!(
-            report.shim,
-            ShimStatus::Installed | ShimStatus::Updated
-        )
+        || matches!(report.shim, ShimStatus::Installed | ShimStatus::Updated)
         || matches!(report.keybind, KeybindStatus::Installed);
 
     if need_reload {
@@ -147,7 +131,7 @@ pub fn print_report(r: &SetupReport) {
 fn current_binary() -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
     // Resolve symlinks so the shim points at the real plugin binary.
-    fs::canonicalize(&exe).or_else(|_| Ok(exe))
+    fs::canonicalize(&exe).or(Ok(exe))
 }
 
 fn herdr_config_path() -> Option<PathBuf> {

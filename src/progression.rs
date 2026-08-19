@@ -70,6 +70,12 @@ pub struct Accrual {
     acc: u64,
 }
 
+impl Default for Accrual {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Accrual {
     pub const fn new() -> Self {
         Self { acc: 0 }

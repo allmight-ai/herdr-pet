@@ -15,7 +15,11 @@ macro_rules! outln {
 }
 
 #[derive(Parser)]
-#[command(name = "herdr-pet", version, about = "Companion V-Pet do Herdr — raridade forjada")]
+#[command(
+    name = "herdr-pet",
+    version,
+    about = "Companion V-Pet do Herdr — raridade forjada"
+)]
 struct Cli {
     #[command(subcommand)]
     cmd: Option<Cmd>,
@@ -64,6 +68,19 @@ enum Cmd {
         quiet: bool,
     },
 }
+
+/// O que o `watch` compara pra decidir se REDESENHA: status do agente, fase da
+/// animação, tarefa exibida, nível, XP dentro do nível, nº de working e rodapé.
+/// Igual ao frame anterior ⇒ nada visível mudou ⇒ pula o desenho.
+type RedrawSig = (
+    herdr_pet::AgentStatus,
+    u32,
+    Option<String>,
+    u8,
+    u64,
+    usize,
+    String,
+);
 
 fn main() {
     let cli = Cli::parse();
@@ -214,20 +231,12 @@ fn main() {
             const TITLE_ROTATION_FRAMES: u32 = 5; // ~4s por tarefa quando há vários working
 
             // sig = o que determina redraw. Inclui nível + XP p/ redesenhar ao subir.
-            let mut last_sig: Option<(
-                herdr_pet::AgentStatus,
-                u32,
-                Option<String>,
-                u8,
-                u64,
-                usize,
-                String,
-            )> = None;
+            let mut last_sig: Option<RedrawSig> = None;
 
             while running.load(Ordering::SeqCst) {
                 // Poll a cada ~2,4s (3 frames): snapshot único — focado (display),
                 // nº working (XP live) e pares (pane,seq) pra trackear sem dupla contagem.
-                if forced.is_none() && frame % 3 == 0 {
+                if forced.is_none() && frame.is_multiple_of(3) {
                     let snap = refresh_agents(&mut state, SeqMode::Track);
                     status = snap.status;
                     titles = snap.titles;
@@ -341,12 +350,10 @@ fn main() {
             // (XP ou baselines de seq ainda não salvos). Roda ANTES de qualquer
             // print do farewell e independe do stdout estar vivo (pane pode ter
             // sido destruído — os prints abaixo ignoram erro justamente por isso).
-            if persist
-                && (state.xp != last_saved_xp || state.last_seq_by_pane != last_saved_seqs)
-            {
-                if herdr_pet::state::save(&state).is_err() {
-                    save_failing = true;
-                }
+            let unsaved =
+                state.xp != last_saved_xp || state.last_seq_by_pane != last_saved_seqs;
+            if persist && unsaved && herdr_pet::state::save(&state).is_err() {
+                save_failing = true;
             }
 
             let summary = session.summarize(state.xp, state.level());
@@ -499,7 +506,11 @@ fn print_pet(pet: &herdr_pet::Pet) {
     outln!("│ HP/SP   : {} / {}", pet.stats.hp_max, pet.stats.sp_max);
     outln!(
         "│ stats   : ATK {} · DEF {} · SpA {} · SpD {} · SPE {}",
-        pet.stats.atk, pet.stats.def, pet.stats.sp_atk, pet.stats.sp_def, pet.stats.speed
+        pet.stats.atk,
+        pet.stats.def,
+        pet.stats.sp_atk,
+        pet.stats.sp_def,
+        pet.stats.speed
     );
     outln!(
         "│ IV      : {}/{}/{}/{}/{}/{}  (hp/atk/def/spA/spD/spe, total {}/{})",
@@ -553,7 +564,11 @@ fn herdr_bin() -> String {
     if let Ok(b) = std::env::var("HERDR_BIN_PATH") {
         return b;
     }
-    if std::process::Command::new("herdr").arg("--version").output().is_ok() {
+    if std::process::Command::new("herdr")
+        .arg("--version")
+        .output()
+        .is_ok()
+    {
         return "herdr".to_string();
     }
     if let Ok(home) = std::env::var("HOME") {
@@ -569,8 +584,12 @@ fn focused_pane() -> Result<String, String> {
         .args(["pane", "current"])
         .output()
         .map_err(|e| format!("herdr pane current: {e}"))?;
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout)
-        .map_err(|_| format!("pane current inesperado: {}", String::from_utf8_lossy(&out.stdout)))?;
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).map_err(|_| {
+        format!(
+            "pane current inesperado: {}",
+            String::from_utf8_lossy(&out.stdout)
+        )
+    })?;
     v["result"]["pane"]["pane_id"]
         .as_str()
         .map(String::from)
@@ -581,7 +600,14 @@ fn focused_pane() -> Result<String, String> {
 fn resize_pet_height(bin: &str, pet: &str, dir: &str, amount: f64) -> Option<u64> {
     let r = std::process::Command::new(bin)
         .args([
-            "pane", "resize", "--pane", pet, "--direction", dir, "--amount", &amount.to_string(),
+            "pane",
+            "resize",
+            "--pane",
+            pet,
+            "--direction",
+            dir,
+            "--amount",
+            &amount.to_string(),
         ])
         .output()
         .ok()?;
@@ -609,8 +635,10 @@ fn pet_panes() -> Result<Vec<(String, Option<String>)>, String> {
                 .filter(|p| p.get("label").and_then(|l| l.as_str()) == Some("Pet"))
                 .filter_map(|p| {
                     let pane_id = p["pane_id"].as_str()?.to_string();
-                    let ws =
-                        p.get("workspace_id").and_then(|w| w.as_str()).map(String::from);
+                    let ws = p
+                        .get("workspace_id")
+                        .and_then(|w| w.as_str())
+                        .map(String::from);
                     Some((pane_id, ws))
                 })
                 .collect()
@@ -784,13 +812,28 @@ fn open_pet_split(bin: &str, target: &str) -> Result<(), String> {
     // 1) abre o pet dockado abaixo do pane atual (split)
     let out = std::process::Command::new(bin)
         .args([
-            "plugin", "pane", "open", "--plugin", PLUGIN_ID, "--entrypoint", "lcd",
-            "--placement", "split", "--target-pane", target, "--direction", "down",
+            "plugin",
+            "pane",
+            "open",
+            "--plugin",
+            PLUGIN_ID,
+            "--entrypoint",
+            "lcd",
+            "--placement",
+            "split",
+            "--target-pane",
+            target,
+            "--direction",
+            "down",
         ])
         .output()
         .map_err(|e| format!("não consegui rodar `herdr`: {e}"))?;
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout)
-        .map_err(|_| format!("resposta inesperada: {}", String::from_utf8_lossy(&out.stdout)))?;
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).map_err(|_| {
+        format!(
+            "resposta inesperada: {}",
+            String::from_utf8_lossy(&out.stdout)
+        )
+    })?;
     let pet = v["result"]["plugin_pane"]["pane"]["pane_id"]
         .as_str()
         .ok_or("não veio o pane_id do pet")?

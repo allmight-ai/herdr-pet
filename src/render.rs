@@ -113,7 +113,7 @@ fn row_sprite(o: &mut String, visual: &str, color: &str, w: usize) {
     let vlen = display_width(visual);
     let inner = w + 2;
     let pad = inner.saturating_sub(vlen) / 2;
-    o.push_str("│");
+    o.push('│');
     o.push_str(&" ".repeat(pad));
     o.push_str(color);
     o.push_str(visual);
@@ -127,20 +127,24 @@ fn row_sprite(o: &mut String, visual: &str, color: &str, w: usize) {
 /// Reação puramente cosmética (v1) — sem progressão.
 fn mood_of(status: AgentStatus) -> (&'static str, &'static str) {
     match status {
-        AgentStatus::Working => ("« treinando »", "\x1b[38;5;46m"),     // verde, energizado
+        AgentStatus::Working => ("« treinando »", "\x1b[38;5;46m"), // verde, energizado
         AgentStatus::Done => ("★ comemorando! ★", "\x1b[1;38;5;220m"), // dourado
-        AgentStatus::Blocked => ("?  curioso  ?", "\x1b[38;5;214m"),   // laranja, alerta
-        AgentStatus::Idle => ("z z z  dormindo", "\x1b[2;38;5;245m"),  // cinza, sono
-        AgentStatus::Unknown => (". . .", "\x1b[2;38;5;245m"),         // cinza, neutro
+        AgentStatus::Blocked => ("?  curioso  ?", "\x1b[38;5;214m"), // laranja, alerta
+        AgentStatus::Idle => ("z z z  dormindo", "\x1b[2;38;5;245m"), // cinza, sono
+        AgentStatus::Unknown => (". . .", "\x1b[2;38;5;245m"),      // cinza, neutro
     }
 }
 
 /// Flair animado acima do sprite, por status. LCD-consistente (ascii/block).
 fn flair(status: AgentStatus, frame: u32) -> Option<&'static str> {
     match status {
-        AgentStatus::Idle => Some("z  z"),                                    // sono
-        AgentStatus::Done => Some(if frame % 2 == 0 { "*  *" } else { "  * " }), // sparkles piscando
-        AgentStatus::Unknown => Some("?"),                                    // confuso
+        AgentStatus::Idle => Some("z  z"), // sono
+        AgentStatus::Done => Some(if frame.is_multiple_of(2) {
+            "*  *"
+        } else {
+            "  * "
+        }), // sparkles piscando
+        AgentStatus::Unknown => Some("?"), // confuso
         AgentStatus::Working | AgentStatus::Blocked => None, // working = bounce; blocked = alerta parado
     }
 }
@@ -184,7 +188,12 @@ pub fn render_casinha(pet: &Pet, frame: u32, status: AgentStatus, task: Option<&
     let shiny_tag = if pet.shiny { " ✨" } else { "" };
     row_left(
         &mut o,
-        &format!("{} · {}{}", pet.species.name, pet.rarity.as_title(), shiny_tag),
+        &format!(
+            "{} · {}{}",
+            pet.species.name,
+            pet.rarity.as_title(),
+            shiny_tag
+        ),
         W,
     );
     // tarefa atual do agente (se houver) — dim, truncada pra caber

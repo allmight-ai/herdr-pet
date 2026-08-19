@@ -281,11 +281,14 @@ pub fn load_from(path: &Path) -> Option<State> {
 fn preserve_corrupt(path: &Path, data: &[u8]) -> PathBuf {
     let mut n = 0;
     loop {
-        let dest = corrupt_sibling(path, &if n == 0 {
-            String::new()
-        } else {
-            format!(".{n}")
-        });
+        let dest = corrupt_sibling(
+            path,
+            &if n == 0 {
+                String::new()
+            } else {
+                format!(".{n}")
+            },
+        );
         match fs::read(&dest) {
             Ok(existing) if existing == data => return dest, // já preservado idêntico
             Ok(_) => {
@@ -354,7 +357,9 @@ const TMP_ORPHAN_GRACE: Duration = Duration::from_secs(600);
 /// dono vivo NUNCA é varrido, senão a varredura de um processo faria o `rename`
 /// do outro falhar (era o que acontecia — ver o teste de regressão).
 fn sweep_orphan_tmps(dir: &Path, own_tmp: &Path) {
-    let Ok(entries) = fs::read_dir(dir) else { return };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
     for e in entries.flatten() {
         let p = e.path();
         let Some(name) = p.file_name().and_then(|n| n.to_str()) else {
@@ -490,10 +495,7 @@ mod tests {
         // mesmo nome = bytes intercalados no rename.
         let t = tmp_sibling(Path::new("d/state.json"));
         let name = t.file_name().unwrap().to_str().unwrap();
-        assert_eq!(
-            name,
-            format!("state.tmp-herdr-pet-{}", std::process::id())
-        );
+        assert_eq!(name, format!("state.tmp-herdr-pet-{}", std::process::id()));
     }
 
     /// Envelhece o mtime de um arquivo — testa a carência sem dormir.
