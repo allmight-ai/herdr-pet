@@ -415,6 +415,11 @@ fn tmp_sibling(path: &Path) -> PathBuf {
 
 // --- lock do state (fatia A) ---
 
+/// Carência pra roubar um `state.lock` quando não dá pra checar o dono
+/// (`pid_alive` → `None`). O heartbeat do watch é ~30 s; dois minutos só
+/// sobram de um crash ou de plataforma sem `/proc`.
+const LOCK_STALE_GRACE: Duration = Duration::from_secs(120);
+
 /// Resultado da tentativa de tomar o lock do state.
 pub enum LockOutcome {
     /// O lock é nosso enquanto o `StateLock` viver.
@@ -424,8 +429,6 @@ pub enum LockOutcome {
 }
 
 /// Posse do `state.lock`. Solta no `Drop` — só se o arquivo ainda for nosso.
-// O `allow` sai junto com os `todo!()` quando a fatia A preencher os corpos.
-#[allow(dead_code)]
 pub struct StateLock {
     pub(crate) path: PathBuf,
     pub(crate) pid: u32,
@@ -433,20 +436,112 @@ pub struct StateLock {
 
 /// Toma o lock do state padrão.
 pub fn acquire_state_lock() -> LockOutcome {
-    todo!("fatia A")
+    acquire_state_lock_in(&state_dir())
 }
 
 /// Toma o lock num dir explícito (testável).
-pub fn acquire_state_lock_in(_dir: &Path) -> LockOutcome {
-    todo!("fatia A")
+pub fn acquire_state_lock_in(dir: &Path) -> LockOutcome {
+    let _ = fs::create_dir_all(dir);
+    let path = dir.join("state.lock");
+    let me = std::process::id();
+    match create_lock_file(&path, me) {
+        Ok(lock) => LockOutcome::Acquired(lock),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => resolve_existing_lock(&path, me),
+        Err(_) => {
+            // Permissão, FS cheio, etc. Sem variante de erro no contrato: se o
+            // arquivo existir, decide por ele; senão reporta held sem dono.
+            if path.exists() {
+                resolve_existing_lock(&path, me)
+            } else {
+                LockOutcome::Held { pid: 0 }
+            }
+        }
+    }
 }
 
 impl StateLock {
     /// Renova o mtime do lock — prova de vida pra quem for avaliar se é sobra
     /// de crash. Chamado no mesmo gate do save periódico (~30 s).
     pub fn heartbeat(&self) {
-        todo!("fatia A")
+        let Ok(f) = fs::File::options().write(true).open(&self.path) else {
+            return;
+        };
+        let now = fs::FileTimes::new().set_modified(SystemTime::now());
+        let _ = f.set_times(now);
     }
+}
+
+impl Drop for StateLock {
+    fn drop(&mut self) {
+        // Nunca apague lock alheio: entre o nosso crash e o Drop, outro watch
+        // pode ter roubado o arquivo (mesmo precedente do varredor de tmp em
+        // 3065fc8 — apagar posse viva custa um save / um watch inteiro).
+        if read_lock_pid(&self.path) == Some(self.pid) {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+}
+
+/// `create_new(true)`: ou o arquivo nasce nosso, ou alguém chegou antes.
+fn create_lock_file(path: &Path, pid: u32) -> std::io::Result<StateLock> {
+    let mut f = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    write!(f, "{pid}")?;
+    f.sync_all()?;
+    Ok(StateLock {
+        path: path.to_path_buf(),
+        pid,
+    })
+}
+
+/// Lock já existe: vivo → `Held`; morto → rouba; sem veredito → idade.
+fn resolve_existing_lock(path: &Path, me: u32) -> LockOutcome {
+    let holder = read_lock_pid(path);
+    match holder.and_then(crate::proc::pid_alive) {
+        Some(true) => LockOutcome::Held {
+            // `and_then` só chega aqui com holder Some; 0 é rede de segurança.
+            pid: holder.unwrap_or(0),
+        },
+        Some(false) => steal_lock(path, me),
+        None => {
+            let stale = lock_age(path).is_some_and(|a| a >= LOCK_STALE_GRACE);
+            if stale {
+                steal_lock(path, me)
+            } else {
+                // Fresco sem veredito (ou pid ilegível): conservador — Held.
+                LockOutcome::Held {
+                    pid: holder.unwrap_or(0),
+                }
+            }
+        }
+    }
+}
+
+/// Remove o arquivo órfão e tenta `create_new` de novo. Se outro processo
+/// ganhar a corrida (ou o remove falhar), devolve `Held` — sem reentrar em
+/// `resolve_existing_lock`, senão um órfão indeletável looparia pra sempre.
+fn steal_lock(path: &Path, me: u32) -> LockOutcome {
+    let _ = fs::remove_file(path);
+    match create_lock_file(path, me) {
+        Ok(lock) => LockOutcome::Acquired(lock),
+        Err(_) => LockOutcome::Held {
+            pid: read_lock_pid(path).unwrap_or(0),
+        },
+    }
+}
+
+fn read_lock_pid(path: &Path) -> Option<u32> {
+    let s = fs::read_to_string(path).ok()?;
+    s.trim().parse().ok()
+}
+
+fn lock_age(path: &Path) -> Option<Duration> {
+    fs::metadata(path)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| SystemTime::now().duration_since(t).ok())
 }
 
 /// Carrega do state padrão.
@@ -616,5 +711,128 @@ mod tests {
             None,
             "lixo no sufixo"
         );
+    }
+
+    fn lock_tdir(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "herdr-pet-lock-{}-{tag}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn lock_livre_vira_acquired_com_nosso_pid() {
+        let dir = lock_tdir("livre");
+        let outcome = acquire_state_lock_in(&dir);
+        let LockOutcome::Acquired(lock) = outcome else {
+            panic!("esperava Acquired, veio Held");
+        };
+        let path = dir.join("state.lock");
+        assert!(path.is_file(), "arquivo de lock existe");
+        assert_eq!(read_lock_pid(&path), Some(std::process::id()));
+        assert_eq!(lock.pid, std::process::id());
+        drop(lock);
+        assert!(!path.exists(), "Drop solta o arquivo");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn lock_de_pid_vivo_fica_held() {
+        // Planta o pid deste processo (vivo) noutro dir — simula outro watch.
+        let dir = lock_tdir("vivo");
+        let path = dir.join("state.lock");
+        fs::write(&path, std::process::id().to_string()).unwrap();
+
+        match acquire_state_lock_in(&dir) {
+            LockOutcome::Held { pid } => assert_eq!(pid, std::process::id()),
+            LockOutcome::Acquired(_) => panic!("pid vivo não pode ser roubado"),
+        }
+        assert_eq!(
+            read_lock_pid(&path),
+            Some(std::process::id()),
+            "lock alheio intacto"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn lock_de_pid_morto_e_roubado() {
+        let dir = lock_tdir("morto");
+        let path = dir.join("state.lock");
+        fs::write(&path, u32::MAX.to_string()).unwrap();
+
+        let outcome = acquire_state_lock_in(&dir);
+        let LockOutcome::Acquired(lock) = outcome else {
+            panic!("pid morto deveria ser roubado");
+        };
+        assert_eq!(read_lock_pid(&path), Some(std::process::id()));
+        drop(lock);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn lock_sem_dono_checavel_vencido_e_roubado() {
+        // Pid 0 → pid_alive = Some(false) na verdade. Pra forçar o ramo None
+        // (idade decide), plantamos conteúdo ilegível e envelhecemos o mtime.
+        let dir = lock_tdir("vencido");
+        let path = dir.join("state.lock");
+        fs::write(&path, b"nao-e-pid").unwrap();
+        age_file(&path, LOCK_STALE_GRACE.as_secs() + 30);
+
+        let outcome = acquire_state_lock_in(&dir);
+        let LockOutcome::Acquired(lock) = outcome else {
+            panic!("lock vencido sem dono checável deveria ser roubado");
+        };
+        assert_eq!(read_lock_pid(&path), Some(std::process::id()));
+        drop(lock);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn drop_nao_apaga_lock_ja_roubado_por_outro_pid() {
+        let dir = lock_tdir("drop-alheio");
+        let lock = match acquire_state_lock_in(&dir) {
+            LockOutcome::Acquired(l) => l,
+            LockOutcome::Held { pid } => panic!("dir livre veio Held {{ pid: {pid} }}"),
+        };
+        let path = dir.join("state.lock");
+        // Outro processo roubou: reescreve o arquivo com pid alheio.
+        fs::write(&path, u32::MAX.to_string()).unwrap();
+        drop(lock);
+        assert!(path.is_file(), "Drop não apaga lock que já não é nosso");
+        assert_eq!(read_lock_pid(&path), Some(u32::MAX));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn heartbeat_renova_o_mtime() {
+        let dir = lock_tdir("heartbeat");
+        let lock = match acquire_state_lock_in(&dir) {
+            LockOutcome::Acquired(l) => l,
+            LockOutcome::Held { pid } => panic!("dir livre veio Held {{ pid: {pid} }}"),
+        };
+        let path = dir.join("state.lock");
+        age_file(&path, 600);
+        let before = fs::metadata(&path).unwrap().modified().unwrap();
+        lock.heartbeat();
+        let after = fs::metadata(&path).unwrap().modified().unwrap();
+        assert!(
+            after > before,
+            "heartbeat deve avançar o mtime (before={before:?}, after={after:?})"
+        );
+        let age = SystemTime::now().duration_since(after).unwrap();
+        assert!(
+            age < Duration::from_secs(5),
+            "mtime renovado deve estar fresco, age={age:?}"
+        );
+        drop(lock);
+        let _ = fs::remove_dir_all(&dir);
     }
 }
