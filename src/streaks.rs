@@ -56,7 +56,9 @@ pub fn by_day(entries: &[Entry]) -> Vec<Day> {
 /// Dia com trabalho é dia com XP **ou** com segundos trabalhados; 0 XP e 0 s é
 /// dia perdido: não vira `last_day` e é buraco no meio da série — quebra como
 /// um dia sem registro nenhum. `today` ilegível também zera a atual: sem saber
-/// que dia é, não dá pra afirmar que a sequência vive.
+/// que dia é, não dá pra afirmar que a sequência vive. A entrada não precisa
+/// vir ordenada nem sem repetição: dia repetido é eco — conta uma vez, não
+/// estende nem quebra.
 pub fn streak(days: &[Day], today: &str) -> Streak {
     let mut trabalhados: Vec<(i64, &Day)> = days
         .iter()
@@ -77,12 +79,16 @@ pub fn streak(days: &[Day], today: &str) -> Streak {
     };
 
     // Uma passada só: ao final, `run` é a sequência que fecha no último dia —
-    // exatamente a candidata a "atual". Dia repetido não estende (só recomeça
-    // em 1), então entrada duplicada não infla.
+    // exatamente a candidata a "atual". Dia repetido é eco de data que já
+    // contou: pular custa nada e mantém o contrato de dias únicos sem exigir
+    // que a entrada venha fundida (`by_day` funde, mas `streak` é pub).
     let mut best = 0u32;
     let mut run = 0u32;
     let mut anterior: Option<i64> = None;
     for &(n, _) in &trabalhados {
+        if anterior == Some(n) {
+            continue;
+        }
         run = if anterior == Some(n - 1) { run + 1 } else { 1 };
         anterior = Some(n);
         best = best.max(run);
@@ -383,6 +389,23 @@ mod tests {
         let s = streak(&[dia("2026-08-19", 10, 5)], "sextou");
         assert_eq!(s.current, 0);
         assert_eq!(s.best, 1);
+        assert_eq!(s.last_day.as_deref(), Some("2026-08-19"));
+    }
+
+    #[test]
+    fn dia_duplicado_na_entrada_nao_subconta() {
+        // streak é pub: pode chegar [d1, d2, d2, d3] sem passar por by_day.
+        // O eco não estende nem quebra — os 3 dias distintos são 3 de sequência
+        // (antes da correção o run reiniciava no repetido e devolvia 2).
+        let dias = vec![
+            dia("2026-08-17", 100, 60),
+            dia("2026-08-18", 50, 30),
+            dia("2026-08-18", 50, 30),
+            dia("2026-08-19", 10, 5),
+        ];
+        let s = streak(&dias, "2026-08-20"); // último dia ontem: sequência viva
+        assert_eq!(s.current, 3);
+        assert_eq!(s.best, 3);
         assert_eq!(s.last_day.as_deref(), Some("2026-08-19"));
     }
 
