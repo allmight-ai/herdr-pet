@@ -446,7 +446,8 @@ pub fn acquire_state_lock() -> LockOutcome {
 /// inofensivo — não há disputa de posse, só FS quebrado. Mentir `Held` faria o
 /// pet virar espelho e desistir de gravar; com `Acquired` o caminho do `⚠ save`
 /// continua tentando e sinaliza o diagnóstico certo. O `Drop` não apaga nada
-/// (arquivo ausente / sem o nosso pid) e o `heartbeat` retorna cedo se não abre.
+/// (arquivo ausente / sem o nosso pid); o `heartbeat` tenta **materializar** o
+/// arquivo no gate seguinte se o FS voltar (P2-3).
 pub fn acquire_state_lock_in(dir: &Path) -> LockOutcome {
     let _ = fs::create_dir_all(dir);
     let path = dir.join("state.lock");
@@ -465,9 +466,25 @@ pub fn acquire_state_lock_in(dir: &Path) -> LockOutcome {
 }
 
 impl StateLock {
-    /// Renova o mtime do lock — prova de vida pra quem for avaliar se é sobra
-    /// de crash. Chamado no mesmo gate do save periódico (~30 s).
+    /// Prova de vida do lock — chamado no mesmo gate do save periódico (~30 s).
+    ///
+    /// - pid nosso → renova o mtime;
+    /// - pid alheio ou ilegível → **não toca** (simétrico ao `Drop`: nunca mexa
+    ///   em posse alheia — com lock inerte do P1-3, o arquivo pode nascer de
+    ///   outro watch e carimbar o mtime dele seria renovar prova de vida alheia);
+    /// - arquivo ausente → tenta **materializar** (`create_new` + nosso pid +
+    ///   fsync): se o FS que estava quebrado voltou, o inerte vira posse real e
+    ///   o segundo watch passa a ver `Held` no gate seguinte (fecha o canto dos
+    ///   dois donos, P2-3);
+    /// - qualquer falha → silêncio.
     pub fn heartbeat(&self) {
+        if !self.path.exists() {
+            let _ = materialize_lock_file(&self.path, self.pid);
+            return;
+        }
+        if read_lock_pid(&self.path) != Some(self.pid) {
+            return;
+        }
         let Ok(f) = fs::File::options().write(true).open(&self.path) else {
             return;
         };
@@ -489,16 +506,24 @@ impl Drop for StateLock {
 
 /// `create_new(true)`: ou o arquivo nasce nosso, ou alguém chegou antes.
 fn create_lock_file(path: &Path, pid: u32) -> std::io::Result<StateLock> {
+    materialize_lock_file(path, pid)?;
+    Ok(StateLock {
+        path: path.to_path_buf(),
+        pid,
+    })
+}
+
+/// Cria o `state.lock` com o pid e dá fsync. Separado do `StateLock` pra o
+/// `heartbeat` poder materializar sem construir um guard cujo `Drop` apagaria
+/// o arquivo recém-nascido.
+fn materialize_lock_file(path: &Path, pid: u32) -> std::io::Result<()> {
     let mut f = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(path)?;
     write!(f, "{pid}")?;
     f.sync_all()?;
-    Ok(StateLock {
-        path: path.to_path_buf(),
-        pid,
-    })
+    Ok(())
 }
 
 /// Lock já existe: vivo → `Held`; morto → rouba; sem veredito → idade.
@@ -541,8 +566,8 @@ fn steal_lock(path: &Path, me: u32) -> LockOutcome {
     }
 }
 
-/// `StateLock` sem arquivo nosso por baixo — Drop/heartbeat já são no-ops
-/// seguros nesse caso. Serve pra não mentir `Held` quando o FS recusou criar.
+/// `StateLock` sem arquivo nosso por baixo. O `Drop` é no-op; o `heartbeat`
+/// tenta materializar se o FS voltar. Serve pra não mentir `Held` na abertura.
 fn inert_lock(path: &Path, pid: u32) -> StateLock {
     StateLock {
         path: path.to_path_buf(),
@@ -878,6 +903,50 @@ mod tests {
                 panic!("FS quebrado sem disputa não pode ser Held {{ pid: {pid} }}")
             }
         }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn heartbeat_nao_renova_mtime_de_lock_alheio() {
+        // P2-2: simétrico ao Drop — nunca carimbe prova de vida de posse alheia
+        // (lock inerte + outro watch criando o arquivo tornava isso alcançável).
+        let dir = lock_tdir("hb-alheio");
+        let lock = match acquire_state_lock_in(&dir) {
+            LockOutcome::Acquired(l) => l,
+            LockOutcome::Held { pid } => panic!("dir livre veio Held {{ pid: {pid} }}"),
+        };
+        let path = dir.join("state.lock");
+        fs::write(&path, u32::MAX.to_string()).unwrap();
+        age_file(&path, 600);
+        let before = fs::metadata(&path).unwrap().modified().unwrap();
+        lock.heartbeat();
+        let after = fs::metadata(&path).unwrap().modified().unwrap();
+        assert_eq!(before, after, "mtime de lock alheio não pode ser renovado");
+        assert_eq!(read_lock_pid(&path), Some(u32::MAX));
+        drop(lock);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn heartbeat_materializa_lock_ausente() {
+        // P2-3: inerte (ou arquivo sumiu) → heartbeat recria com o nosso pid.
+        // Sem isso, FS que volta deixa dois "donos" salvando sem exclusão.
+        let dir = lock_tdir("hb-mat");
+        let lock = match acquire_state_lock_in(&dir) {
+            LockOutcome::Acquired(l) => l,
+            LockOutcome::Held { pid } => panic!("dir livre veio Held {{ pid: {pid} }}"),
+        };
+        let path = dir.join("state.lock");
+        fs::remove_file(&path).unwrap();
+        assert!(!path.exists());
+        lock.heartbeat();
+        assert_eq!(
+            read_lock_pid(&path),
+            Some(std::process::id()),
+            "materializou com o nosso pid"
+        );
+        drop(lock);
+        assert!(!path.exists(), "Drop solta o lock materializado");
         let _ = fs::remove_dir_all(&dir);
     }
 }
