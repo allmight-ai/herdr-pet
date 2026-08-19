@@ -165,6 +165,10 @@ fn main() {
             // ESPELHO — mesmo caminho do dev `--id`/`--mood` (desenha tudo,
             // nunca grava), marcado no rodapé. O XP real fica com o dono.
             let mut mirror = false;
+            // Promoção travada por state ilegível no disco (lock livre, sem
+            // dono): o rodapé troca `⚠ espelho` por `⚠ state ilegível` —
+            // culpar um dono que não existe é sinal mentiroso.
+            let mut state_unreadable = false;
             let mut state_lock: Option<herdr_pet::state::StateLock> = None;
             if persist {
                 match herdr_pet::state::acquire_state_lock() {
@@ -310,7 +314,14 @@ fn main() {
                 // o LCD.
                 let mut footer = badge;
                 if mirror {
-                    footer = format!("{footer} · ⚠ espelho");
+                    // Rótulo honesto: `⚠ espelho` quando OUTRO pet é o dono;
+                    // `⚠ state ilegível` quando o lock está livre e o que
+                    // trava a promoção é o state no disco.
+                    footer = if state_unreadable {
+                        format!("{footer} · ⚠ state ilegível")
+                    } else {
+                        format!("{footer} · ⚠ espelho")
+                    };
                 }
                 if save_failing {
                     footer = format!("{footer} · ⚠ save");
@@ -370,15 +381,26 @@ fn main() {
                                 match herdr_pet::state::load_outcome() {
                                     herdr_pet::state::LoadOutcome::Loaded(disk) => {
                                         state = disk;
+                                        // NOTA (chocadeira futura): o `pet`
+                                        // desenhado não é reforgado aqui — hoje
+                                        // nada muda `active_index` em runtime,
+                                        // mas no dia em que mudar, a promoção
+                                        // terá que rehatch(gid, state.active_index).
                                         last_saved_xp = state.xp;
                                         last_saved_seqs = state.last_seq_by_pane.clone();
-                                        // Sessão reancorada ANTES do catch-up:
-                                        // o hiato (dono saiu → agora) entra no
+                                        // Sessão RENASCIDA antes do catch-up: o
+                                        // hiato (dono saiu → agora) entra no
                                         // delta como "recuperado", igual à
                                         // abertura — o `log` soma `xp_gained`
                                         // por dia, excluir aqui subcontaria o
-                                        // dia inteiro.
+                                        // dia inteiro. O renascimento zera
+                                        // também tempo/panes: o trecho de
+                                        // espelho já saiu na linha do dono.
                                         session.rebase(state.xp, state.level());
+                                        // A fração de milli-XP junta no modo
+                                        // espelho morre com ele — até 1 XP, mas
+                                        // inflar é inflar.
+                                        accrual = herdr_pet::progression::Accrual::new();
                                         let snap = refresh_agents(&mut state, SeqMode::Catchup);
                                         status = snap.status;
                                         titles = snap.titles;
@@ -387,18 +409,26 @@ fn main() {
                                         session.note_working(&snap.working_panes, snap.n_working);
                                         persist = true;
                                         mirror = false;
+                                        state_unreadable = false;
                                         state_lock = Some(l);
                                     }
                                     // Sem state legível, não promove: salvar
                                     // por cima de ausente/ilegível destruiria
                                     // dados (ver `LoadOutcome`). Solta o lock
-                                    // que acabou de nascer e tenta de novo no
-                                    // próximo gate.
-                                    _ => drop(l),
+                                    // que acabou de nascer, acende o sinal
+                                    // honesto e tenta de novo no próximo gate.
+                                    _ => {
+                                        state_unreadable = true;
+                                        drop(l);
+                                    }
                                 }
                             }
-                            // Dono ainda vivo: segue espelho, retry no próximo gate.
-                            herdr_pet::state::LockOutcome::Held { .. } => {}
+                            // Dono ainda vivo: segue espelho (o rótulo volta a
+                            // ser `⚠ espelho`, que agora é a verdade), retry
+                            // no próximo gate.
+                            herdr_pet::state::LockOutcome::Held { .. } => {
+                                state_unreadable = false;
+                            }
                         }
                     } else if let Some(l) = state_lock.as_ref() {
                         l.heartbeat();
@@ -477,8 +507,13 @@ fn main() {
             let mut line = summary.format_line();
             if mirror {
                 // O resumo do espelho mostra um XP que este pane NÃO gravou —
-                // o sufixo impede a leitura de "ganhei e salvou".
-                line.push_str(" · espelho");
+                // o sufixo impede a leitura de "ganhei e salvei". Mesma voz do
+                // rodapé: sem dono no lock, o motivo é o state, não o espelho.
+                line.push_str(if state_unreadable {
+                    " · state ilegível"
+                } else {
+                    " · espelho"
+                });
             }
             if !mirror {
                 notify_session(&line);

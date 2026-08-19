@@ -69,13 +69,19 @@ impl Session {
         self.working_time += dt;
     }
 
-    /// Reancora a sessão num state novo (promoção de espelho → dono): o delta
-    /// passa a contar dali pra frente. O trecho de espelho não vira ganho
-    /// desta sessão — o XP daquele período pertence ao dono que saiu (ou a
-    /// ninguém), nunca a quem só desenhava.
+    /// Renasce a sessão num state novo (promoção de espelho → dono): o delta E
+    /// o tempo passam a contar dali pra frente. O trecho de espelho já foi
+    /// contado na linha de diário do dono que saiu — herdar
+    /// working_time/panes aqui duplicaria o tempo no `log`, que soma por dia
+    /// (P1-1 do PARECER-2: 41 s + 86 s = 127 s de trabalho numa parede de 90 s).
     pub fn rebase(&mut self, xp: u64, level: u8) {
         self.start_xp = xp;
         self.start_level = level;
+        self.started_at = Instant::now();
+        self.started_epoch = epoch_now();
+        self.working_time = Duration::ZERO;
+        self.working_panes.clear();
+        self.peak_working = 0;
     }
 
     /// Fecha a sessão: delta de XP, agentes que trabalharam, nível, duração.
@@ -272,17 +278,29 @@ mod tests {
     }
 
     #[test]
-    fn rebase_reancora_o_delta_na_promocao() {
-        // Espelho que promove não herda o delta do período de espelho: sem
-        // rebase, o resumo inflaria com XP que o dono gravou por fora.
+    fn rebase_renasce_a_sessao_na_promocao() {
+        // Espelho que promove RENASCE: o trecho de espelho já foi contado na
+        // linha de diário do dono que saiu — herdar tempo/panes faria o `log`
+        // somar mais trabalho do que o relógio permite (P1-1 do PARECER-2).
         let mut sess = Session::start(1000, 5);
         sess.note_working(["w1:p1"], 1);
         sess.note_working_span(Duration::from_secs(60));
-        assert_eq!(sess.summarize(1200, 6).xp_gained, 200);
+        let antes = sess.summarize(1200, 6);
+        assert_eq!(antes.xp_gained, 200);
+        assert_eq!(antes.secs_working, 60, "o período contava antes do rebase");
         sess.rebase(1200, 6);
         let depois = sess.summarize(1250, 6);
         assert_eq!(depois.xp_gained, 50, "delta renasce do rebase");
         assert_eq!(depois.start_level, 6);
+        assert_eq!(
+            depois.secs_working, 0,
+            "tempo de espelho não vira tempo de dono"
+        );
+        assert_eq!(depois.agents, 0, "panes do espelho não herdam");
+        assert!(
+            depois.started_at >= antes.ended_at,
+            "janela de epoch recomeça no rebase"
+        );
     }
 
     #[test]
