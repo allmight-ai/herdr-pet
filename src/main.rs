@@ -351,14 +351,57 @@ fn main() {
                     last_sig = Some(sig);
                 }
 
-                // Heartbeat do lock no mesmo ritmo do save (~30s): prova de vida
-                // pra o próximo watch decidir se um lock parado é sobra de crash
-                // ou dono vivo. Roda mesmo sem nada a salvar — é sobre o lock,
-                // não sobre o state. Espelho não tem lock (e não heartbeata).
+                // Heartbeat/promoção no ritmo do save (~30s): dono renova o
+                // mtime do lock — prova de vida pra o próximo watch decidir se
+                // um lock parado é sobra de crash ou dono vivo. Espelho tenta
+                // PROMOVER: se o dono saiu (o lock cai no fecho dele), este
+                // pane assume o state em vez de seguir desenhando sem ganhar
+                // nada até o fim da sessão.
                 if frame.wrapping_sub(last_beat_frame) >= SAVE_EVERY_FRAMES {
-                    if let Some(l) = state_lock.as_ref() {
+                    last_beat_frame = frame;
+                    if mirror {
+                        match herdr_pet::state::acquire_state_lock() {
+                            herdr_pet::state::LockOutcome::Acquired(l) => {
+                                // Promoção: reler o DISCO é obrigatório — o
+                                // state em memória do espelho é foto da
+                                // abertura dele, e salvar por cima apagaria o
+                                // XP que o dono gravou de verdade. Rebase
+                                // tudo no que veio do disco.
+                                match herdr_pet::state::load_outcome() {
+                                    herdr_pet::state::LoadOutcome::Loaded(disk) => {
+                                        state = disk;
+                                        last_saved_xp = state.xp;
+                                        last_saved_seqs = state.last_seq_by_pane.clone();
+                                        // Sessão reancorada ANTES do catch-up:
+                                        // o hiato (dono saiu → agora) entra no
+                                        // delta como "recuperado", igual à
+                                        // abertura — o `log` soma `xp_gained`
+                                        // por dia, excluir aqui subcontaria o
+                                        // dia inteiro.
+                                        session.rebase(state.xp, state.level());
+                                        let snap = refresh_agents(&mut state, SeqMode::Catchup);
+                                        status = snap.status;
+                                        titles = snap.titles;
+                                        n_working = snap.n_working;
+                                        working_labels = snap.working_labels;
+                                        session.note_working(&snap.working_panes, snap.n_working);
+                                        persist = true;
+                                        mirror = false;
+                                        state_lock = Some(l);
+                                    }
+                                    // Sem state legível, não promove: salvar
+                                    // por cima de ausente/ilegível destruiria
+                                    // dados (ver `LoadOutcome`). Solta o lock
+                                    // que acabou de nascer e tenta de novo no
+                                    // próximo gate.
+                                    _ => drop(l),
+                                }
+                            }
+                            // Dono ainda vivo: segue espelho, retry no próximo gate.
+                            herdr_pet::state::LockOutcome::Held { .. } => {}
+                        }
+                    } else if let Some(l) = state_lock.as_ref() {
                         l.heartbeat();
-                        last_beat_frame = frame;
                     }
                 }
 
@@ -421,6 +464,15 @@ fn main() {
                 let entry = summary.to_entry(herdr_pet::journal::today_local());
                 journal_failing = herdr_pet::journal::append(&entry).is_err();
             }
+
+            // Última escrita feita (save final + diário): o lock sai AGORA,
+            // antes do farewell. O farewell segura o processo por
+            // FAREWELL_MS (~1,4 s) só pra desenhar, e o toggle "move" fecha
+            // este pane e reabre o pet ~1,2 s depois da linha de resumo — se
+            // o lock só caísse no fim do braço, o pet novo nasceria espelho
+            // em TODO move (corrida medida no PARECER-1). Lock protege
+            // escrita; não há mais escrita pela frente.
+            drop(state_lock.take());
 
             let mut line = summary.format_line();
             if mirror {
@@ -648,6 +700,9 @@ fn print_progress(state: &herdr_pet::state::State) {
 /// sessões) e a sequência. I/O só na borda — janela, linha do dia e frase da
 /// sequência são puras e testadas no fim do arquivo.
 fn print_log(window: u32) {
+    // `--days 0` é janela vazia (nem hoje entra) — clampa pra 1, o pedido mais
+    // próximo que faz sentido; rejeitar no clap seria cerimônia à toa.
+    let window = window.max(1);
     use herdr_pet::streaks;
 
     let today = herdr_pet::journal::today_local();

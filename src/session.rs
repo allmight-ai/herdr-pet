@@ -69,6 +69,15 @@ impl Session {
         self.working_time += dt;
     }
 
+    /// Reancora a sessão num state novo (promoção de espelho → dono): o delta
+    /// passa a contar dali pra frente. O trecho de espelho não vira ganho
+    /// desta sessão — o XP daquele período pertence ao dono que saiu (ou a
+    /// ninguém), nunca a quem só desenhava.
+    pub fn rebase(&mut self, xp: u64, level: u8) {
+        self.start_xp = xp;
+        self.start_level = level;
+    }
+
     /// Fecha a sessão: delta de XP, agentes que trabalharam, nível, duração.
     ///
     /// Contagem: se **nunca** vimos `pane_id`, o pico anônimo vale (API omitiu).
@@ -260,6 +269,20 @@ mod tests {
         sess.note_working_span(Duration::from_millis(700));
         sess.note_working_span(Duration::from_millis(700));
         assert_eq!(sess.summarize(0, 1).secs_working, 1); // 1,4s → 1s
+    }
+
+    #[test]
+    fn rebase_reancora_o_delta_na_promocao() {
+        // Espelho que promove não herda o delta do período de espelho: sem
+        // rebase, o resumo inflaria com XP que o dono gravou por fora.
+        let mut sess = Session::start(1000, 5);
+        sess.note_working(["w1:p1"], 1);
+        sess.note_working_span(Duration::from_secs(60));
+        assert_eq!(sess.summarize(1200, 6).xp_gained, 200);
+        sess.rebase(1200, 6);
+        let depois = sess.summarize(1250, 6);
+        assert_eq!(depois.xp_gained, 50, "delta renasce do rebase");
+        assert_eq!(depois.start_level, 6);
     }
 
     #[test]
