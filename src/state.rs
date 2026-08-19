@@ -440,6 +440,13 @@ pub fn acquire_state_lock() -> LockOutcome {
 }
 
 /// Toma o lock num dir explícito (testável).
+///
+/// Erro de IO que **não** é `AlreadyExists` e sem `state.lock` no lugar (dir
+/// read-only, disco cheio, etc.) devolve `Acquired` com um `StateLock`
+/// inofensivo — não há disputa de posse, só FS quebrado. Mentir `Held` faria o
+/// pet virar espelho e desistir de gravar; com `Acquired` o caminho do `⚠ save`
+/// continua tentando e sinaliza o diagnóstico certo. O `Drop` não apaga nada
+/// (arquivo ausente / sem o nosso pid) e o `heartbeat` retorna cedo se não abre.
 pub fn acquire_state_lock_in(dir: &Path) -> LockOutcome {
     let _ = fs::create_dir_all(dir);
     let path = dir.join("state.lock");
@@ -448,12 +455,10 @@ pub fn acquire_state_lock_in(dir: &Path) -> LockOutcome {
         Ok(lock) => LockOutcome::Acquired(lock),
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => resolve_existing_lock(&path, me),
         Err(_) => {
-            // Permissão, FS cheio, etc. Sem variante de erro no contrato: se o
-            // arquivo existir, decide por ele; senão reporta held sem dono.
             if path.exists() {
                 resolve_existing_lock(&path, me)
             } else {
-                LockOutcome::Held { pid: 0 }
+                LockOutcome::Acquired(inert_lock(&path, me))
             }
         }
     }
@@ -520,15 +525,28 @@ fn resolve_existing_lock(path: &Path, me: u32) -> LockOutcome {
 }
 
 /// Remove o arquivo órfão e tenta `create_new` de novo. Se outro processo
-/// ganhar a corrida (ou o remove falhar), devolve `Held` — sem reentrar em
-/// `resolve_existing_lock`, senão um órfão indeletável looparia pra sempre.
+/// ganhar a corrida, devolve `Held`. Se o create falhar **sem** arquivo no
+/// lugar (FS quebrado após o remove), devolve `Acquired` inerte — mesma regra
+/// de `acquire_state_lock_in`. Sem reentrar em `resolve_existing_lock`, senão
+/// um órfão indeletável looparia pra sempre.
 fn steal_lock(path: &Path, me: u32) -> LockOutcome {
     let _ = fs::remove_file(path);
     match create_lock_file(path, me) {
         Ok(lock) => LockOutcome::Acquired(lock),
-        Err(_) => LockOutcome::Held {
-            pid: read_lock_pid(path).unwrap_or(0),
+        Err(_) => match read_lock_pid(path) {
+            Some(pid) => LockOutcome::Held { pid },
+            None if path.exists() => LockOutcome::Held { pid: 0 },
+            None => LockOutcome::Acquired(inert_lock(path, me)),
         },
+    }
+}
+
+/// `StateLock` sem arquivo nosso por baixo — Drop/heartbeat já são no-ops
+/// seguros nesse caso. Serve pra não mentir `Held` quando o FS recusou criar.
+fn inert_lock(path: &Path, pid: u32) -> StateLock {
+    StateLock {
+        path: path.to_path_buf(),
+        pid,
     }
 }
 
@@ -833,6 +851,33 @@ mod tests {
             "mtime renovado deve estar fresco, age={age:?}"
         );
         drop(lock);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn fs_quebrado_sem_arquivo_nao_vira_held() {
+        // P1-3: dir sem escrita → create_new falha e não há state.lock. Mentir
+        // Held { pid: 0 } faria o pet espelhar e desistir de gravar; o certo é
+        // Acquired inerte e deixar o ⚠ save diagnosticar o FS.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = lock_tdir("readonly");
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o555)).unwrap();
+        let outcome = acquire_state_lock_in(&dir);
+        // Restaura antes de qualquer assert/panic pra o tmp não ficar preso.
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+        match outcome {
+            LockOutcome::Acquired(lock) => {
+                assert!(
+                    !dir.join("state.lock").exists(),
+                    "FS read-only não criou lock"
+                );
+                drop(lock);
+            }
+            LockOutcome::Held { pid } => {
+                panic!("FS quebrado sem disputa não pode ser Held {{ pid: {pid} }}")
+            }
+        }
         let _ = fs::remove_dir_all(&dir);
     }
 }
