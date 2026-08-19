@@ -9,6 +9,7 @@ pub mod anchor;
 pub mod catalog;
 pub mod crypto;
 pub mod forge;
+pub mod journal;
 pub mod name;
 pub mod pet;
 pub mod proc;
@@ -18,6 +19,7 @@ pub mod session;
 pub mod setup;
 pub mod sprites;
 pub mod state;
+pub mod streaks;
 pub mod subagents;
 
 pub use agent::{AgentInfo, AgentStatus, AgentsSnapshot};

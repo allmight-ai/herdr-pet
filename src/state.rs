@@ -413,6 +413,42 @@ fn tmp_sibling(path: &Path) -> PathBuf {
     path.with_extension(format!("tmp-herdr-pet-{}", std::process::id()))
 }
 
+// --- lock do state (fatia A) ---
+
+/// Resultado da tentativa de tomar o lock do state.
+pub enum LockOutcome {
+    /// O lock é nosso enquanto o `StateLock` viver.
+    Acquired(StateLock),
+    /// Outro processo vivo já tem o state; `pid` é o dono.
+    Held { pid: u32 },
+}
+
+/// Posse do `state.lock`. Solta no `Drop` — só se o arquivo ainda for nosso.
+// O `allow` sai junto com os `todo!()` quando a fatia A preencher os corpos.
+#[allow(dead_code)]
+pub struct StateLock {
+    pub(crate) path: PathBuf,
+    pub(crate) pid: u32,
+}
+
+/// Toma o lock do state padrão.
+pub fn acquire_state_lock() -> LockOutcome {
+    todo!("fatia A")
+}
+
+/// Toma o lock num dir explícito (testável).
+pub fn acquire_state_lock_in(_dir: &Path) -> LockOutcome {
+    todo!("fatia A")
+}
+
+impl StateLock {
+    /// Renova o mtime do lock — prova de vida pra quem for avaliar se é sobra
+    /// de crash. Chamado no mesmo gate do save periódico (~30 s).
+    pub fn heartbeat(&self) {
+        todo!("fatia A")
+    }
+}
+
 /// Carrega do state padrão.
 pub fn load() -> Option<State> {
     load_from(&state_path())
