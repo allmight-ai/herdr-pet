@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use crate::progression::{harmonic_weighted_xp, level_for_xp, xp_for_catchup};
 
@@ -342,25 +343,69 @@ pub fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
     fs::rename(&tmp, path)
 }
 
+/// Prazo a partir do qual um tmp vira lixo mesmo sem prova de que o dono morreu.
+/// Uma gravação em voo vive milissegundos; dez minutos só sobram de um crash.
+const TMP_ORPHAN_GRACE: Duration = Duration::from_secs(600);
+
 /// Remove tmps órfãos de processos que morreram entre create e rename (o crash
 /// deixava `*.tmp-herdr-pet-<pid>` no diretório pra sempre). Best-effort: erros
-/// ignorados; o tmp do pid corrente (`own_tmp`) é poupado. Varredura acontece só
-/// ao salvar — não há varredura "de passagem" em comandos só-leitura.
+/// ignorados. Varredura acontece só ao salvar — não há varredura "de passagem"
+/// em comandos só-leitura. Quem decide o que é lixo é `tmp_is_garbage`: tmp de
+/// dono vivo NUNCA é varrido, senão a varredura de um processo faria o `rename`
+/// do outro falhar (era o que acontecia — ver o teste de regressão).
 fn sweep_orphan_tmps(dir: &Path, own_tmp: &Path) {
     let Ok(entries) = fs::read_dir(dir) else { return };
     for e in entries.flatten() {
         let p = e.path();
-        if p == own_tmp {
-            continue;
-        }
         let Some(name) = p.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
         // O marcador sem o sufixo de pid cobre também sobras do formato antigo.
-        if name.contains("tmp-herdr-pet") {
+        if !name.contains("tmp-herdr-pet") {
+            continue;
+        }
+        let age = e
+            .metadata()
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| SystemTime::now().duration_since(t).ok());
+        if tmp_is_garbage(p == own_tmp, age, owner_alive(tmp_owner_pid(name))) {
             let _ = fs::remove_file(&p);
         }
     }
+}
+
+/// A regra da varredura, isolada pra ser testável (o `read_dir` em si não é).
+/// O tmp deste processo nunca é lixo; um tmp que passou da carência é (cobre
+/// formato antigo, plataforma sem `/proc` e pid reciclado por outro programa);
+/// e um tmp de dono comprovadamente morto é. Dono vivo + tmp recente = gravação
+/// em voo de OUTRO processo — o pid no nome existe justamente pra dois `watch`
+/// salvarem em paralelo, e apagar o tmp alheio desfazia essa garantia.
+fn tmp_is_garbage(own: bool, age: Option<Duration>, owner_alive: Option<bool>) -> bool {
+    if own {
+        return false;
+    }
+    if age.is_some_and(|a| a >= TMP_ORPHAN_GRACE) {
+        return true;
+    }
+    // Sem idade legível e sem veredito sobre o dono, poupa: deixar lixo custa um
+    // arquivo, apagar tmp vivo custa um save.
+    owner_alive == Some(false)
+}
+
+/// O pid declarado no fim do nome do tmp (`…tmp-herdr-pet-<pid>`). `None` no
+/// formato antigo, que não carregava dono.
+fn tmp_owner_pid(name: &str) -> Option<u32> {
+    name.rsplit_once("tmp-herdr-pet-")?.1.parse().ok()
+}
+
+/// O dono do tmp ainda roda? `None` quando não dá pra saber — sem pid no nome
+/// ou sem `/proc` na plataforma — e aí só a idade decide.
+fn owner_alive(pid: Option<u32>) -> Option<bool> {
+    let pid = pid?;
+    Path::new("/proc/self")
+        .exists()
+        .then(|| Path::new("/proc").join(pid.to_string()).exists())
 }
 
 /// Nome do tmp do `write_atomic` pra este processo.
@@ -451,29 +496,93 @@ mod tests {
         );
     }
 
+    /// Envelhece o mtime de um arquivo — testa a carência sem dormir.
+    fn age_file(p: &Path, secs: u64) {
+        let f = fs::File::options().write(true).open(p).unwrap();
+        let t = SystemTime::now() - Duration::from_secs(secs);
+        f.set_times(fs::FileTimes::new().set_modified(t)).unwrap();
+    }
+
     #[test]
-    fn write_atomic_varre_tmps_orfaos_de_outros_pids() {
+    fn write_atomic_varre_tmps_orfaos_mas_poupa_os_vivos() {
         // Crash entre create e rename deixava tmp órfão pra sempre. O próximo
-        // save de QUALQUER processo remove os tmps que não são dele — inclusive
-        // sobras do formato antigo (sem pid). Demais arquivos ficam intocados.
+        // save remove o que passou da carência — inclusive sobras do formato
+        // antigo (sem pid). Tmp recente de dono vivo e arquivos sem relação
+        // alguma ficam intocados.
         let dir = std::env::temp_dir().join(format!("herdr-pet-sweep-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let orphan = dir.join(format!("state.tmp-herdr-pet-{}", u32::MAX)); // pid impossível
         let legacy = dir.join("state.tmp-herdr-pet"); // formato antigo
+        let vivo = dir.join(format!("outro.tmp-herdr-pet-{}", std::process::id()));
         let keep = dir.join("state.json.corrupt");
-        fs::write(&orphan, b"...").unwrap();
-        fs::write(&legacy, b"...").unwrap();
-        fs::write(&keep, b"...").unwrap();
+        for f in [&orphan, &legacy, &vivo, &keep] {
+            fs::write(f, b"...").unwrap();
+        }
+        age_file(&orphan, 3600);
+        age_file(&legacy, 3600);
 
         let target = dir.join("state.json");
         let s = State::new(1);
         save_to(&target, &s).unwrap();
 
-        assert!(!orphan.exists(), "tmp órfão de outro pid removido");
+        assert!(!orphan.exists(), "tmp órfão vencido removido");
         assert!(!legacy.exists(), "sobra do formato antigo removida");
+        assert!(vivo.exists(), "tmp recente de dono vivo é poupado");
         assert!(keep.exists(), "arquivo sem relação alguma é poupado");
         assert!(load_from(&target).is_some(), "o save em si funcionou");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tmp_em_voo_de_outro_processo_nao_e_varrido() {
+        // REGRESSÃO: a varredura apagava QUALQUER tmp que não fosse o seu. Dois
+        // `watch` salvando ao mesmo tempo (o cenário que o pid no nome existe
+        // pra cobrir) viravam `rename` NotFound — save perdido, XP junto.
+        assert!(!tmp_is_garbage(
+            false,
+            Some(Duration::from_millis(5)),
+            Some(true)
+        ));
+    }
+
+    #[test]
+    fn tmp_de_dono_morto_e_varrido_na_hora() {
+        assert!(tmp_is_garbage(
+            false,
+            Some(Duration::from_millis(5)),
+            Some(false)
+        ));
+    }
+
+    #[test]
+    fn tmp_vencido_e_varrido_mesmo_sem_veredito_do_dono() {
+        // Formato antigo, plataforma sem /proc ou pid reciclado: a carência é a
+        // rede de segurança pra o lixo não ficar eterno.
+        assert!(tmp_is_garbage(false, Some(TMP_ORPHAN_GRACE), None));
+        assert!(!tmp_is_garbage(false, Some(Duration::from_secs(1)), None));
+        // Sem idade e sem dono conhecido, poupa.
+        assert!(!tmp_is_garbage(false, None, None));
+    }
+
+    #[test]
+    fn tmp_do_proprio_processo_nunca_e_varrido() {
+        assert!(!tmp_is_garbage(
+            true,
+            Some(Duration::from_secs(86_400)),
+            Some(false)
+        ));
+    }
+
+    #[test]
+    fn dono_do_tmp_sai_do_nome() {
+        assert_eq!(tmp_owner_pid("state.tmp-herdr-pet-42"), Some(42));
+        assert_eq!(tmp_owner_pid("state.tmp-herdr-pet"), None, "formato antigo");
+        assert_eq!(
+            tmp_owner_pid("state.tmp-herdr-pet-abc"),
+            None,
+            "lixo no sufixo"
+        );
+        assert_eq!(owner_alive(None), None);
     }
 }
