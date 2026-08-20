@@ -4,6 +4,50 @@ Todas as mudanças notáveis deste projeto serão documentadas aqui.
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/)
 e o projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [0.5.0] - 2026-08-19
+
+O pet ganha memória: cada sessão encerrada vira histórico, e o histórico vira
+sequência de dias. Junto, a casa foi arrumada e o velho risco de dois `watch`
+sobre o mesmo state morreu.
+
+### Added
+- **Diário de sessões**: todo fecho de pane vira uma linha em `sessions.jsonl`,
+  ao lado do `state.json` — dia, janela, XP ganho, nível, agentes e tempo
+  acompanhado. Append-only e tolerante: linha ilegível é pulada, arquivo ausente
+  é diário vazio. Acessório de verdade — falha na gravação avisa no fecho e não
+  toca no state, no XP nem no LCD.
+- **`herdr-pet log [--days N]`** (default 7): XP, tempo e sessões por dia, mais a
+  sequência. O dia é o **local** do fecho, não o UTC — sequência conta os dias de
+  quem trabalhou.
+- **Sequência no `status`**: dias consecutivos com trabalho e o recorde. Dia sem
+  XP e sem tempo acompanhado é buraco e quebra a série; a sequência atual só vale
+  se o último dia com trabalho é hoje ou ontem.
+- **Lock do state**: a posse é um arquivo no dir do state, tomada na abertura e
+  solta na última gravação. O segundo `watch` (o `plugin pane open` chamado
+  direto, que o toggle não cobria) vira **pet espelho** — desenha tudo, não grava
+  nada, marcado com `⚠ espelho` no rodapé — e assume a posse se o dono sair,
+  relendo o state do disco. Lock órfão de processo morto é roubado; sem veredito
+  sobre o dono, decide a idade.
+
+### Fixed
+- **Varredura de tmp apagava gravação viva**: o `sweep_orphan_tmps` removia
+  qualquer `*.tmp-herdr-pet-*` que não fosse o seu, desfazendo a garantia que o
+  pid no nome existe pra dar — dois processos salvando ao mesmo tempo, um
+  apagava o tmp em voo do outro e o `rename` saía `NotFound` (save perdido, até
+  ~30 s de XP). Agora só é lixo o tmp próprio vencido, o de dono comprovadamente
+  morto, ou o que passou da carência de 10 min.
+
+### Changed
+- `subagents.rs` (1560 linhas, metade de teste) virou módulo por dono:
+  `subagents/{mod,claude,grok,testkit}.rs`. Movimentação pura — nenhuma regra
+  mudou e os mesmos 34 testes continuam lá.
+- `proc::pid_alive` num lugar só (tri-estado: sabe vivo, sabe morto, não deu pra
+  checar), servindo tanto a varredura de tmp quanto a detecção de subagentes.
+- Repo `fmt`-clean e `clippy --all-targets` com zero warnings. Sprites, catálogo
+  de espécies e vocabulário de nomes ficaram fora do `rustfmt` por
+  `#[rustfmt::skip]`: são tabelas e desenho, onde a formatação automática lê pior.
+- Suíte de 135 para 177 testes.
+
 ## [0.4.0] - 2026-08-14
 
 Release da caça de bugs orquestrada (PR #3, 27 commits): 4 caçadores de IA em
