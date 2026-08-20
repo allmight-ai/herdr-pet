@@ -2,7 +2,7 @@
 
 use crate::catalog::{base_stats_for_tier, species_for_tier, RARITY_WEIGHTS, SHINY_DENOMINATOR};
 use crate::crypto::{gene, root_seed, GENESIS_VERSION};
-use crate::pet::{CombatStats, IV, Pet, Provenance, Rarity, Species};
+use crate::pet::{CombatStats, Pet, Provenance, Rarity, Species, IV};
 
 /// GitHub ID do autor — easter egg do tier Primordial no pet #0.
 pub const FREDERICO_ID: u64 = 76918723;
@@ -53,7 +53,7 @@ pub fn hatch(github_id: u64, index: u32) -> Pet {
     } else {
         (
             roll_weighted(u64_of(&pet_seed, "rarity")),
-            u64_of(&pet_seed, "shiny") % SHINY_DENOMINATOR as u64 == 0,
+            u64_of(&pet_seed, "shiny").is_multiple_of(SHINY_DENOMINATOR as u64),
         )
     };
     let species = pick_species(rarity, u64_of(&pet_seed, "species"));

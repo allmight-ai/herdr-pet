@@ -1,6 +1,7 @@
 //! Sprites 1-bit em **block elements** Unicode (▀▄█▌▐▟▙▜▛ ░) — todos width 1,
 //! então alinham perfeitamente em qualquer terminal (sem símbolos/emojis ambíguos).
 
+#[rustfmt::skip]
 pub fn sprite_for(species_id: &str) -> &'static [&'static str] {
     match species_id {
         "pix" => &[

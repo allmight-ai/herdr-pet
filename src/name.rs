@@ -7,6 +7,7 @@
 
 use crate::crypto::gene;
 
+#[rustfmt::skip]
 const PREFIXES: &[&str] = &[
     "Vex", "Zor", "Kry", "Nyx", "Gli", "Blu", "Orl", "Wis", "Vol", "Qua",
     "Zep", "Mor", "Tor", "Lum", "Daz", "Cyr", "Fae", "Ryn", "Pix", "Hex",
@@ -14,12 +15,14 @@ const PREFIXES: &[&str] = &[
     "Kha", "Lyr", "Myr", "Ory", "Pra", "Syl", "Tha", "Vor", "Xan", "Zen",
 ];
 
+#[rustfmt::skip]
 const MIDDLES: &[&str] = &[
     "a", "e", "i", "o", "u", "ae", "el", "il", "ol", "ul",
     "ar", "er", "ir", "or", "ur", "al", "em", "im", "om", "an",
     "en", "in", "on", "un", "ax", "ex", "ix", "ox", "la", "na",
 ];
 
+#[rustfmt::skip]
 const SUFFIXES: &[&str] = &[
     "ix", "ax", "ox", "on", "um", "eth", "ar", "in", "yl", "us",
     "or", "en", "is", "ai", "ek", "yn", "ir", "av", "im", "os",
@@ -55,11 +58,19 @@ mod tests {
     fn readable_part_uses_vocab() {
         let s = root_seed("github:42");
         let n = readable(&gene(&s, "pet:0"));
-        assert!(n.len() >= 5 && n.len() <= 12, "nome legível estranho: {}", n);
+        assert!(
+            n.len() >= 5 && n.len() <= 12,
+            "nome legível estranho: {}",
+            n
+        );
     }
 
     #[test]
     fn readable_space_is_large() {
-        assert!(readable_space() >= 40_000, "espaço legível pequeno: {}", readable_space());
+        assert!(
+            readable_space() >= 40_000,
+            "espaço legível pequeno: {}",
+            readable_space()
+        );
     }
 }

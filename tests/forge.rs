@@ -81,7 +81,11 @@ fn pet_names_are_unique_in_practice() {
     let mut seen = HashSet::new();
     for id in 0..1000u64 {
         let pet = hatch(id, 0);
-        assert!(seen.insert(pet.name.clone()), "nome duplicado: {}", pet.name);
+        assert!(
+            seen.insert(pet.name.clone()),
+            "nome duplicado: {}",
+            pet.name
+        );
     }
 }
 

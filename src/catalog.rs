@@ -26,6 +26,7 @@ pub const RARITY_ORDER: &[Rarity] = &[
 pub const SHINY_DENOMINATOR: u32 = 128;
 
 /// Espécies disponíveis num tier.
+#[rustfmt::skip]
 pub fn species_for_tier(tier: Rarity) -> &'static [Species] {
     match tier {
         Rarity::Common => &[
@@ -60,6 +61,7 @@ pub fn species_for_tier(tier: Rarity) -> &'static [Species] {
 
 /// Base stats por tier (provisório — calibrar por espécie depois).
 /// `stat_efetivo = base + IV`; IV perfeito (31) atinge o topo (`base + 31`).
+#[rustfmt::skip]
 pub fn base_stats_for_tier(tier: Rarity) -> BaseStats {
     match tier {
         Rarity::Common => BaseStats { hp: 40, atk: 30, def: 30, sp_atk: 30, sp_def: 30, speed: 30, sp: 30 },

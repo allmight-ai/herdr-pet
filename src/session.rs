@@ -2,10 +2,12 @@
 //!
 //! Uma sessão começa na abertura do `watch` e termina no Ctrl+C / SIGHUP
 //! (toggle). O resumo reforça o loop de progressão — fechar com recompensa
-//! visível. Conceito em `CONTEXT.md` ("Sessão").
+//! visível — e vira linha do diário (`journal::Entry`): o que a tela mostra
+//! numa fração de segundo, o diário guarda pra sempre. Conceito em
+//! `CONTEXT.md` ("Sessão").
 
 use std::collections::HashSet;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Prefixo estável do resumo — o toggle espera esta substring no pane.
 /// Mais específico que `"Sessão"` (C12): um título de tarefa com a palavra
@@ -20,8 +22,14 @@ pub struct Session {
     start_xp: u64,
     start_level: u8,
     started_at: Instant,
+    /// Início em epoch (segundos) — o `Instant` é monótono pra medir duração,
+    /// mas o diário precisa de uma âncora no relógio de parede (`started_at`).
+    started_epoch: u64,
     working_panes: HashSet<String>,
     peak_working: usize,
+    /// Tempo total com algum agente `working` (o mesmo gate do XP live) —
+    /// acumulado como `Duration` pra o sub-segundo de cada tick não truncar.
+    working_time: Duration,
 }
 
 impl Session {
@@ -31,8 +39,10 @@ impl Session {
             start_xp: xp,
             start_level: level,
             started_at: Instant::now(),
+            started_epoch: epoch_now(),
             working_panes: HashSet::new(),
             peak_working: 0,
+            working_time: Duration::ZERO,
         }
     }
 
@@ -52,6 +62,28 @@ impl Session {
         self.peak_working = self.peak_working.max(n_working);
     }
 
+    /// Conta `dt` como trabalho acompanhado (havia `working` no tick — o mesmo
+    /// `mult > 0` que rende XP). Vira `secs_working` do diário; sessão sem
+    /// acompanhamento (só catch-up) grava 0.
+    pub fn note_working_span(&mut self, dt: Duration) {
+        self.working_time += dt;
+    }
+
+    /// Renasce a sessão num state novo (promoção de espelho → dono): o delta E
+    /// o tempo passam a contar dali pra frente. O trecho de espelho já foi
+    /// contado na linha de diário do dono que saiu — herdar
+    /// working_time/panes aqui duplicaria o tempo no `log`, que soma por dia
+    /// (P1-1 do PARECER-2: 41 s + 86 s = 127 s de trabalho numa parede de 90 s).
+    pub fn rebase(&mut self, xp: u64, level: u8) {
+        self.start_xp = xp;
+        self.start_level = level;
+        self.started_at = Instant::now();
+        self.started_epoch = epoch_now();
+        self.working_time = Duration::ZERO;
+        self.working_panes.clear();
+        self.peak_working = 0;
+    }
+
     /// Fecha a sessão: delta de XP, agentes que trabalharam, nível, duração.
     ///
     /// Contagem: se **nunca** vimos `pane_id`, o pico anônimo vale (API omitiu).
@@ -66,21 +98,60 @@ impl Session {
         Summary {
             agents,
             xp_gained: end_xp.saturating_sub(self.start_xp),
+            xp_total: end_xp,
             start_level: self.start_level,
             end_level,
             duration: self.started_at.elapsed(),
+            started_at: self.started_epoch,
+            ended_at: epoch_now(),
+            secs_working: self.working_time.as_secs(),
         }
     }
 }
 
-/// Snapshot imutável do que aconteceu na sessão — só apresentação.
+/// Epoch de agora em segundos; 0 se o relógio estiver antes de 1970 (não
+/// deveria acontecer — e o piso 0 só atrasa a linha do diário, não derruba nada).
+fn epoch_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Snapshot imutável do que aconteceu na sessão — apresentação E a linha que
+/// vira histórico (`to_entry`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Summary {
     pub agents: usize,
     pub xp_gained: u64,
+    /// XP total no fecho (a âncora histórica: de onde o próximo dia compara).
+    pub xp_total: u64,
     pub start_level: u8,
     pub end_level: u8,
     pub duration: Duration,
+    /// Início/fim em epoch (segundos) — duração é pra tela, epoch é pro diário.
+    pub started_at: u64,
+    pub ended_at: u64,
+    /// Segundos com trabalho acompanhado (sem catch-up — aquele não foi visto).
+    pub secs_working: u64,
+}
+
+impl Summary {
+    /// A sessão como linha do diário, no dia dado. O dia é do FECHO, decidido
+    /// pelo chamador (`journal::today_local()`) — quem conta sequência conta
+    /// os dias do usuário.
+    pub fn to_entry(&self, day: String) -> crate::journal::Entry {
+        crate::journal::Entry {
+            day,
+            started_at: self.started_at,
+            ended_at: self.ended_at,
+            xp_gained: self.xp_gained,
+            xp_total: self.xp_total,
+            level: self.end_level,
+            agents: self.agents,
+            secs_working: self.secs_working,
+        }
+    }
 }
 
 impl Summary {
@@ -117,7 +188,7 @@ impl Summary {
 }
 
 /// Inteiro com separador de milhar pt-BR (`1240` → `1.240`).
-fn format_int(n: u64) -> String {
+pub fn format_int(n: u64) -> String {
     let digits = n.to_string();
     let mut out = String::new();
     for (i, c) in digits.chars().rev().enumerate() {
@@ -129,7 +200,9 @@ fn format_int(n: u64) -> String {
     out.chars().rev().collect()
 }
 
-fn format_duration(d: Duration) -> String {
+/// Duração legível (`47 min`, `1 h 23 min`) — o resumo da sessão e as linhas
+/// do diário (`log`) compartilham a mesma voz.
+pub fn format_duration(d: Duration) -> String {
     let secs = d.as_secs();
     if secs < 60 {
         format!("{secs} s")
@@ -154,10 +227,110 @@ mod tests {
         Summary {
             agents,
             xp_gained: xp,
+            xp_total: 0,
             start_level: from,
             end_level: to,
             duration: Duration::from_secs(secs),
+            started_at: 0,
+            ended_at: secs,
+            secs_working: secs,
         }
+    }
+
+    #[test]
+    fn entry_leva_os_campos_da_sessao_e_o_dia_do_fecho() {
+        // O resumo é a tela; a Entry é a história — o mapeamento não pode
+        // trocar campo (level do fecho, xp_total âncora, dias/horas cruas).
+        let s = Summary {
+            agents: 2,
+            xp_gained: 1_240,
+            xp_total: 45_678,
+            start_level: 6,
+            end_level: 7,
+            duration: Duration::from_secs(47 * 60),
+            started_at: 1_755_600_000,
+            ended_at: 1_755_602_820,
+            secs_working: 2_700,
+        };
+        let e = s.to_entry("2026-08-19".to_string());
+        assert_eq!(
+            e,
+            crate::journal::Entry {
+                day: "2026-08-19".to_string(),
+                started_at: 1_755_600_000,
+                ended_at: 1_755_602_820,
+                xp_gained: 1_240,
+                xp_total: 45_678,
+                level: 7,
+                agents: 2,
+                secs_working: 2_700,
+            }
+        );
+    }
+
+    #[test]
+    fn tempo_de_trabalho_acumula_subsegundo_sem_truncar_por_tick() {
+        // Tick do watch é ~0,8s: truncar por tick perderia ~40% do tempo.
+        let mut sess = Session::start(0, 1);
+        sess.note_working_span(Duration::from_millis(700));
+        sess.note_working_span(Duration::from_millis(700));
+        assert_eq!(sess.summarize(0, 1).secs_working, 1); // 1,4s → 1s
+    }
+
+    #[test]
+    fn rebase_renasce_a_sessao_na_promocao() {
+        // Espelho que promove RENASCE: o trecho de espelho já foi contado na
+        // linha de diário do dono que saiu — herdar tempo/panes faria o `log`
+        // somar mais trabalho do que o relógio permite (P1-1 do PARECER-2).
+        let mut sess = Session::start(1000, 5);
+        sess.note_working(["w1:p1"], 1);
+        sess.note_working_span(Duration::from_secs(60));
+        let antes = sess.summarize(1200, 6);
+        assert_eq!(antes.xp_gained, 200);
+        assert_eq!(antes.secs_working, 60, "o período contava antes do rebase");
+        sess.rebase(1200, 6);
+        let depois = sess.summarize(1250, 6);
+        assert_eq!(depois.xp_gained, 50, "delta renasce do rebase");
+        assert_eq!(depois.start_level, 6);
+        assert_eq!(
+            depois.secs_working, 0,
+            "tempo de espelho não vira tempo de dono"
+        );
+        assert_eq!(depois.agents, 0, "panes do espelho não herdam");
+        assert!(
+            depois.started_at >= antes.ended_at,
+            "janela de epoch recomeça no rebase"
+        );
+    }
+
+    #[test]
+    fn sessao_sem_acompanhamento_grava_zero_segundos() {
+        // Catch-up puro (ninguém working com o pane aberto): 0, não a duração.
+        let mut sess = Session::start(0, 1);
+        sess.note_working(std::iter::empty::<&str>(), 0);
+        assert_eq!(sess.summarize(300, 1).secs_working, 0);
+    }
+
+    #[test]
+    fn summarize_ancora_total_e_janela_de_epoch() {
+        let sess = Session::start(100, 2);
+        let s = sess.summarize(250, 3);
+        assert_eq!(s.xp_gained, 150);
+        assert_eq!(s.xp_total, 250, "total é a âncora do histórico");
+        assert!(
+            s.ended_at >= s.started_at,
+            "janela de epoch não pode fechar antes de abrir"
+        );
+    }
+
+    #[test]
+    fn xp_que_regride_satura_em_zero_mas_ancora_o_total_real() {
+        // State regravado por outro processo pode fechar abaixo da abertura:
+        // delta satura (nunca negativo), o total registra o que de fato há.
+        let sess = Session::start(500, 3);
+        let s = sess.summarize(200, 2);
+        assert_eq!(s.xp_gained, 0);
+        assert_eq!(s.xp_total, 200);
     }
 
     #[test]
