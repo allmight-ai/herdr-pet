@@ -28,6 +28,7 @@ A espécie, a raridade, o nome e os stats vêm do seu ID do GitHub. Apagar o sta
 - Forja espécie, raridade, shiny, nome e stats a partir do GitHub
 - Ganha XP e sobe de nível com o trabalho real do agente (curva até o nível 99)
 - Ao fechar, mostra um resumo da sessão (agentes, XP, nível, duração)
+- Guarda cada sessão num diário e conta sua sequência de dias trabalhados
 - Abre e fecha sob demanda com `prefix+a` em qualquer workspace
 - Atalho e CLI no PATH configurados **automaticamente** no install
 - Só consome recurso enquanto o painel está aberto
@@ -80,7 +81,8 @@ herdr-pet setup               # reaplicar atalho + PATH (idempotente)
 herdr-pet open                # abre ou fecha o painel (precisa do Herdr rodando)
 herdr-pet watch               # casinha ao vivo no terminal atual
 herdr-pet watch --mood done   # pré-visualiza um humor (dev, só-leitura)
-herdr-pet status              # identidade + XP, nível e quem está working
+herdr-pet status              # identidade + XP, nível, sequência e quem está working
+herdr-pet log                 # diário: últimos 7 dias e a sequência (--days N)
 herdr-pet gallery             # um pet de cada raridade
 herdr-pet init                # trava a âncora do GitHub e choca o pet #0
 ```
@@ -126,6 +128,12 @@ A detecção usa o Screen Manifest do Herdr (Claude Code sem configuração extr
 **Progressão (XP e nível).**  
 O pet ganha XP só com trabalho **real de qualquer agente** — conta todos os projetos, não só o focado. 1 agente `working` rende o ritmo cheio (~1000 XP/h); cada agente extra rende menos (½, ⅓, … — decaimento harmônico, anti-proliferação). Com o painel fechado, o trabalho é contabilizado na reabertura pelo `state_change_seq`, num ritmo menor. `idle` não rende XP. O nível (1–99) é derivado do XP total — cada nível pede mais que o anterior (`100 × nível`); chegar ao 99 é meta de longo prazo (~1 ano). Ao fechar o pane, um resumo da sessão mostra agentes, XP ganho, nível e duração. Ver `CONTEXT.md` e `docs/adr/`.
 
+**Diário e sequência.**  
+Todo fecho de pane vira uma linha em `sessions.jsonl`, ao lado do `state.json`: dia, janela, XP ganho, nível, agentes e tempo acompanhado. `herdr-pet log` soma por dia e mostra a **sequência** — dias consecutivos com trabalho e o recorde; o `status` mostra a mesma linha. O dia é o **local** do fecho, não o UTC: sequência conta os dias de quem trabalhou. Dia sem XP e sem tempo acompanhado não segura a série. O diário é acessório — se a gravação falhar, o pet avisa no fecho e segue inteiro.
+
+**Um dono por vez.**  
+Dois `watch` sobre o mesmo `state.json` se sobrescreveriam. A posse é um lock no dir do state: quem abre segundo vira **pet espelho** — desenha tudo, não grava nada (o rodapé marca `⚠ espelho`), e o trabalho do período fica com o dono. Se o dono fechar, o espelho assume no ciclo seguinte, relendo o state do disco.
+
 **State.**  
 Âncora e índice ativo ficam em `HERDR_PLUGIN_STATE_DIR` (pane do Herdr) ou no dir XDG do plugin (`~/.local/state/herdr/plugins/allmight-ai.herdr-pet/`) — padrão de leitura **e** escrita fora do pane (`init`/`save` criam); `.herdr-pet-state/` no diretório atual só é usado se **já existir** (compat com dev antigo, nunca criado).  
 A gravação é atômica (tmp+rename); se o arquivo ficar ilegível, o conteúdo é preservado em `state.json.corrupt` (com aviso) antes de qualquer recriação — nada se perde em silêncio. A raridade não “mora” no arquivo: é recalculada a partir da âncora.
@@ -153,6 +161,7 @@ Species, rarity, name, and stats come from your GitHub ID. Wipe the state and ru
 - Forges species, rarity, shiny, name, and stats from GitHub
 - Earns XP and levels up from the agent's real work (curve up to level 99)
 - On close, shows a session summary (agents, XP, level, duration)
+- Keeps every session in a journal and tracks your streak of worked days
 - Toggles on demand with `prefix+a` in any workspace
 - **Hotkey + CLI PATH are configured automatically on install**
 - Runs only while the pane is open
@@ -198,7 +207,8 @@ herdr-pet setup               # re-apply hotkey + PATH (idempotent)
 herdr-pet open                # toggle the pane (Herdr must be running)
 herdr-pet watch               # live house in the current terminal
 herdr-pet watch --mood done   # preview a mood (dev, read-only)
-herdr-pet status              # identity + XP, level, and who is working
+herdr-pet status              # identity + XP, level, streak, and who is working
+herdr-pet log                 # journal: last 7 days and the streak (--days N)
 herdr-pet gallery             # one pet per rarity tier
 herdr-pet init                # lock GitHub anchor and hatch pet #0
 ```
@@ -221,6 +231,12 @@ The same `(github_id, index)` always produces the same pet.
 
 **Progression (XP & level).**  
 The pet earns XP only from **any agent's** real work — it counts all projects, not just the focused one. 1 working agent earns the full rate (~1000 XP/h); each extra agent earns less (½, ⅓, … — harmonic decay, anti-proliferation). With the pane closed, work is tallied on reopen via `state_change_seq` at a lower rate. `idle` earns nothing. Level (1–99) is derived from total XP — each level needs more than the last (`100 × level`); reaching 99 is a long-term goal (~1 year). Closing the pane prints a session summary (agents, XP gained, level, duration). See `CONTEXT.md` and `docs/adr/`.
+
+**Journal & streak.**  
+Every pane close appends a line to `sessions.jsonl`, next to `state.json`: day, window, XP gained, level, agents, and accompanied time. `herdr-pet log` aggregates per day and shows the **streak** — consecutive worked days plus the record; `status` prints the same line. The day is the **local** date at close, not UTC: a streak counts the days of whoever did the work. A day with no XP and no accompanied time does not hold the streak. The journal is an accessory — if the write fails, the pet says so on close and carries on intact.
+
+**One owner at a time.**  
+Two `watch` processes over the same `state.json` would overwrite each other. Ownership is a lock in the state dir: whoever opens second becomes a **mirror pet** — it draws everything and writes nothing (the footer marks `⚠ espelho`), and the work of that period belongs to the owner. If the owner closes, the mirror takes over on the next cycle, re-reading state from disk.
 
 **State.**  
 Anchor and active index live under `HERDR_PLUGIN_STATE_DIR` (Herdr pane) or the plugin's XDG dir (`~/.local/state/herdr/plugins/allmight-ai.herdr-pet/`) — the default for reading **and** writing outside the pane (`init`/`save` create it); `.herdr-pet-state/` in the current directory is only honored if it **already exists** (old-dev compat, never created).  

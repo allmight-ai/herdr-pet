@@ -51,5 +51,29 @@ O indicador, lido do Herdr, de que o agente de fato trabalhou: o status `working
 _Avoid_: contador de tempo, heartbeat
 
 **Sessão**:
-O período em que o pane do pet ficou aberto. Ao fechar (Ctrl+C ou toggle), o pet mostra um resumo: agentes que trabalharam, XP ganho (incluindo catch-up da abertura), nível e duração.
+O período em que o pane do pet ficou aberto. Ao fechar (Ctrl+C ou toggle), o pet mostra um resumo: agentes que trabalharam, XP ganho (incluindo catch-up da abertura), nível e duração. O mesmo resumo vira uma linha do **Diário**.
 _Avoid_: run, playthrough
+
+### Histórico
+
+**Diário**:
+O histórico de sessões encerradas — uma linha por fecho de pane, guardada ao lado do state. O resumo aparece por um segundo na tela; o diário guarda pra sempre. Acessório: nenhuma falha dele afeta o pet.
+_Avoid_: log de eventos, telemetria
+
+**Dia**:
+A unidade do diário: todas as sessões fechadas na mesma data **local** do usuário, somadas. A data é decidida no fecho — quem conta dia conta o dia de quem trabalhou, não o do UTC.
+_Avoid_: data do arquivo, dia UTC
+
+**Sequência**:
+Dias consecutivos com trabalho, mais o recorde histórico. Um dia sem XP e sem tempo acompanhado é buraco: quebra a série como um dia sem registro nenhum. A sequência atual só vale se o último dia com trabalho é hoje ou ontem.
+_Avoid_: streak diário, combo
+
+### Quem manda no state
+
+**Dono do state**:
+O único `watch` autorizado a gravar. A posse é um lock no dir do state, tomada na abertura e solta na última gravação.
+_Avoid_: instância principal, master
+
+**Pet espelho**:
+O `watch` que abriu sem conseguir a posse (já havia dono). Desenha tudo e não grava nada — nem XP, nem state, nem diário; o trabalho daquele período é contado pelo dono. Assume a posse se o dono sair. Não confundir com o pet **espelhar o humor** do agente, que é outra coisa.
+_Avoid_: pet secundário, réplica
